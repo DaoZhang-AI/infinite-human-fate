@@ -74,3 +74,12 @@
     resize: vertical;
     font-size: 0.9em;
 }
+
+/* 抽屉标题上的 New! 角标,有新版才亮 */
+.ihf-settings .ihf-new {
+    color: var(--warning, #c0392b);
+    font-size: 0.8em;
+    font-weight: bold;
+    margin-left: 0.4em;
+    cursor: help;
+}

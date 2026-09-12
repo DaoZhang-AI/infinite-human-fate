@@ -82,6 +82,9 @@ export const DEFAULT_CONFIG = {
      *  深度 0 会插在整段对话最后面,把用户那句顶掉,而不少模型要求末条必须是 user
      *  (道长)。1 = 紧挨在用户最后那句之前,注意力一样高,但末条还是用户。 */
     injectDepth: 1,
+    /** 开页面几秒后问一次酒馆"这个扩展有没有新版",有就在抽屉标题上挂个 New!。
+     *  服务端会真的 git fetch 一趟,所以是延后问的,不占开屏。不想要就填 false。 */
+    checkUpdate: true,
     /** 手动锁档:'' = 自动,'big' / 'small' = 锁死 */
     tierLock: '',
     defaultTier: 'big',

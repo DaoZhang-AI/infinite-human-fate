@@ -27,7 +27,7 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -901,6 +901,38 @@ globalThis.ihf_interceptor = async function (chat, _contextSize, _abort, type) {
     }
 };
 
+/**
+ * 抽屉标题上那个 New! 角标:有新版就亮出来。
+ *
+ * 走酒馆自己的 `POST /api/extensions/version`。**服务端会真的 git fetch 一次**
+ * (src/endpoints/extensions.js),是一趟到 GitHub 的往返,所以绝不能放在开屏关键路径上,
+ * 等页面歇下来再问,一个页面只问一次。
+ *
+ * 坑(织梦者那边踩过):这个端点对"不是 git 仓库"的目录返回 200 + 空字符串 + isUpToDate:true。
+ * 所以判断能不能更新**必须先看 currentCommitHash 有没有值**,不能只看 isUpToDate,
+ * 否则手动拷进去的文件夹会被当成"已是最新"。
+ */
+async function checkUpdate() {
+    if (state.config?.checkUpdate === false) return;
+    try {
+        const res = await fetch('/api/extensions/version', {
+            method: 'POST',
+            headers: ctx().getRequestHeaders(),
+            // 端点自己会 sanitize,给光文件夹名就行,不要带 third-party/ 前缀
+            body: JSON.stringify({ extensionName: 'infinite-human-fate', global: false }),
+        });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d.currentCommitHash || d.isUpToDate) return;
+        $('#ihf-new')
+            .attr('title', `有新版可以更新(本地 ${String(d.currentCommitHash).slice(0, 7)})。去「织梦者 → 我的插件」,或者酒馆自己的扩展管理里点更新。`)
+            .prop('hidden', false);
+        console.info(LOG, '有新版可以更新');
+    } catch (e) {
+        console.debug(LOG, '查更新没问成,不影响使用', e);
+    }
+}
+
 /* ---------------- 面板 ---------------- */
 
 function escapeHtml(s) {
@@ -1219,7 +1251,7 @@ function mountPanel() {
 <div class="ihf-settings">
   <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
-      <b>无限人类命运 <span class="ihf-muted">v${VERSION}</span></b>
+      <b>无限人类命运 <span class="ihf-muted">v${VERSION}</span><span id="ihf-new" class="ihf-new" hidden>New!</span></b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
@@ -1351,6 +1383,8 @@ jQuery(async () => {
         state.generating = false;
         setTimeout(() => { refresh(); autoJobs(); }, 300);
     });
+    // 查更新要等服务端 git fetch 一趟,别跟开屏抢路,歇一会儿再问
+    setTimeout(checkUpdate, 8000);
     eventSource.on(et.CHATCOMPLETION_MODEL_CHANGED, () => updateTier(true));
     eventSource.on(et.MAIN_API_CHANGED, () => updateTier(true));
     await openChat();
