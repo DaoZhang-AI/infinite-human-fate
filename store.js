@@ -82,6 +82,8 @@ export const DEFAULT_CONFIG = {
      *  深度 0 会插在整段对话最后面,把用户那句顶掉,而不少模型要求末条必须是 user
      *  (道长)。1 = 紧挨在用户最后那句之前,注意力一样高,但末条还是用户。 */
     injectDepth: 1,
+    /** 界面偏好:悬浮球在哪、显不显示、日夜。存这儿不进 settings.json */
+    ui: { ball: true, ballPos: null, theme: 'night' },
     /** 开页面几秒后问一次酒馆"这个扩展有没有新版",有就在抽屉标题上挂个 New!。
      *  服务端会真的 git fetch 一趟,所以是延后问的,不占开屏。不想要就填 false。 */
     checkUpdate: true,
