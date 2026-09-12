@@ -21,13 +21,14 @@ import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVe
 import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js';
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
+import { mountShell } from './ui.js';
 import { COMMON, WORLD, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank } from './siliconflow.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.6.1';
+const VERSION = '0.7.0';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -67,7 +68,12 @@ const state = {
     jobs: { running: false, kind: '', done: 0, total: 0, failed: 0, stop: false, error: '' },
     /** 开局好感自动估过几次。模型老不按格式写就别一直重试,面板按钮照样能手动再来 */
     affinityInitTried: 0,
+    /** 查到有新版 */
+    hasUpdate: false,
 };
+
+/** 界面外壳(悬浮球 + 面板),mountPanel() 里建起来 */
+let ui = null;
 
 /** 排障用:控制台里 ihf_state 能看到当前状态,用户报 bug 时可以让她截这个。只在内存里,不存盘 */
 globalThis.ihf_state = state;
@@ -924,9 +930,9 @@ async function checkUpdate() {
         if (!res.ok) return;
         const d = await res.json();
         if (!d.currentCommitHash || d.isUpToDate) return;
-        $('#ihf-new')
-            .attr('title', `有新版可以更新(本地 ${String(d.currentCommitHash).slice(0, 7)})。去「织梦者 → 我的插件」,或者酒馆自己的扩展管理里点更新。`)
-            .prop('hidden', false);
+        $('#ihf-new').prop('hidden', false);
+        state.hasUpdate = true;
+        render();
         console.info(LOG, '有新版可以更新');
     } catch (e) {
         console.debug(LOG, '查更新没问成,不影响使用', e);
@@ -969,6 +975,7 @@ function render() {
             lines.push(`档位:${escapeHtml(tier.label)} · 模型 ${escapeHtml(state.model || '未知')}${how}`);
         }
         if (state.config.enabled === false) lines.push('<span class="ihf-error">插件总开关关着,这一轮什么都不做</span>');
+        if (state.hasUpdate) lines.push('<span class="ihf-error">有新版可以更新:去「织梦者 → 我的插件」,或者酒馆自己的扩展管理里点更新</span>');
         if (!state.chatId) {
             lines.push('没有打开聊天');
         } else if (!state.view) {
@@ -1002,11 +1009,14 @@ function render() {
     renderTimeline();
     renderPeople();
     renderFate();
+    // 球上转圈 = 后台在跑活;小黄点 = 有事要她看一眼
+    ui?.setBusy(state.jobs.running || state.emb.running);
+    ui?.setWarn(Boolean(state.error || state.emb.error || state.memory?.fate?.pending || detectLegacy().length));
 }
 
 function renderTimeline() {
     const el = document.getElementById('ihf-tl-view');
-    if (!el || !$('#ihf-tl-box').prop('open')) return;
+    if (!el || ui?.current !== 'wuxian') return;
     const done = currentChunks().map(ch => state.memory?.timeline?.[ch.key]).filter(Boolean);
     if (!done.length) {
         el.innerHTML = '<span class="ihf-muted">还没有压好的时间线</span>';
@@ -1041,7 +1051,7 @@ async function saveFateSettings() {
 /** 幕后明细:一人一栏,念头原文只在这儿看得见 */
 function renderFate() {
     const el = document.getElementById('ihf-fate-view');
-    if (!el || !$('#ihf-fate-box').prop('open')) return;
+    if (!el || ui?.current !== 'mingyun') return;
     const fate = state.memory?.fate;
     const cfg = state.config?.fate;
     if (cfg?.enabled === false) { el.innerHTML = '<span class="ihf-muted">命运模块关着</span>'; return; }
@@ -1094,7 +1104,7 @@ function renderFate() {
 /** 人物明细:好感、性格弧、情绪、约定账。这是道长的那道闸,模型写歪了要在这儿看得见 */
 function renderPeople() {
     const el = document.getElementById('ihf-people-view');
-    if (!el || !$('#ihf-people-box').prop('open')) return;
+    if (!el || ui?.current !== 'renlei') return;
     const v = state.view;
     const pcfg = state.config?.people;
     if (!v?.people || !Object.keys(v.people).length) {
@@ -1112,7 +1122,7 @@ function renderPeople() {
         out.push(`<div><b>${escapeHtml(p.name)}</b>`
             + (modOn('affinity')
                 ? ` <span class="ihf-muted">好感 ${p.affinity}(${escapeHtml(tier?.name ?? '')})</span>`
-                  + ` 开局 <input type="number" class="ihf-start text_pole" data-name="${escapeHtml(p.name)}" value="${p.start}" min="-100" max="100" style="width:4.5em">`
+                  + ` 开局 <input type="number" class="ihf-start" data-name="${escapeHtml(p.name)}" value="${p.start}" min="-100" max="100" style="width:4.5em">`
                   + (p.startWhy ? ` <span class="ihf-muted">${p.startSource === 'manual' ? '(你改的)' : ''}${escapeHtml(p.startWhy)}</span>` : '')
                 : '')
             + '</div>');
@@ -1246,8 +1256,175 @@ async function saveSettings() {
     }
 }
 
+/* ---------------- 面板:悬浮球 + 三分页 ---------------- */
+
+/** 每一页里放什么。壳(球、遮罩、分页、拖动、日夜)在 ui.js 里 */
+const PAGE_HTML = {
+    wuxian: `
+      <div id="ihf-status" class="ihf-rows"></div>
+      <div class="ihf-acts">
+        <button id="ihf-reload" class="ihf-btn">重新对账</button>
+        <button id="ihf-backfill" class="ihf-btn">补记账</button>
+        <button id="ihf-timeline" class="ihf-btn">压时间线</button>
+        <button id="ihf-stop" class="ihf-btn" style="display:none">停止</button>
+      </div>
+      <hr class="ihf-sep">
+      <div class="ihf-card"><h4>时间线</h4><div id="ihf-tl-view" class="ihf-rows"></div></div>`,
+
+    renlei: `
+      <div id="ihf-people-view" class="ihf-rows"></div>
+      <div class="ihf-acts">
+        <button id="ihf-affinit" class="ihf-btn">估开局好感</button>
+        <button id="ihf-origins" class="ihf-btn">摘性格原句</button>
+        <button id="ihf-breakif" class="ihf-btn">问破锚条件</button>
+      </div>
+      <div class="ihf-muted">数都是按各层的加减现算的,不存死值。改了楼、滑了 swipe,重新对账就跟着变。</div>
+      <hr class="ihf-sep">
+      <div class="ihf-card">
+        <h4>这几块各管各的</h4>
+        <div class="ihf-muted">角色卡自带好感度的话,就把好感度那块关掉,免得两套一起发打架。</div>
+        <div class="ihf-form">
+          <label><input type="checkbox" id="ihf-mod-affinity"> 好感度</label>
+          <label><input type="checkbox" id="ihf-mod-emotion"> 情绪</label>
+          <label><span class="ihf-lab">情绪档</span><select id="ihf-emotion"><option value="major">只在重大事件后(推荐)</option><option value="all">全开(模拟真实世界)</option></select></label>
+          <label><input type="checkbox" id="ihf-mod-arc"> 性格弧</label>
+          <label><input type="checkbox" id="ihf-mod-promise"> 约定账</label>
+          <label><input type="checkbox" id="ihf-mod-item"> 物品账</label>
+          <button id="ihf-save" class="ihf-btn ihf-primary">保存</button>
+        </div>
+      </div>
+      <div class="ihf-card">
+        <h4>物品禁词表</h4>
+        <div class="ihf-form">
+          <label style="flex-direction:column;align-items:stretch">
+            <span>一律不记(吃的喝的抽的)</span>
+            <textarea id="ihf-never" rows="3" placeholder="一行一个,或者用逗号隔开"></textarea>
+          </label>
+          <div class="ihf-muted">两个字以上的词,名字里带上就算;一个字的词,要去掉量词后正好是它才算(不然"水"会把"墨水""水晶吊坠"也拦掉)。</div>
+          <label style="flex-direction:column;align-items:stretch">
+            <span>只在换了人拿、或者丢了毁了时才记(手机钱包这类随身物)</span>
+            <textarea id="ihf-common" rows="3" placeholder="一行一个,或者用逗号隔开"></textarea>
+          </label>
+          <button id="ihf-save-items" class="ihf-btn ihf-primary">保存禁词表</button>
+          <div class="ihf-muted">上面表格里每样东西后面也有 [不记] [只在出事时记],点一下就加进来,改完立刻重算。</div>
+        </div>
+      </div>`,
+
+    mingyun: `
+      <div id="ihf-fate-view" class="ihf-rows"></div>
+      <div class="ihf-acts">
+        <button id="ihf-fate-ideas" class="ihf-btn">立念头</button>
+        <button id="ihf-fate-survey" class="ihf-btn">跑一次推演</button>
+      </div>
+      <hr class="ihf-sep">
+      <div class="ihf-card">
+        <h4>命运设置</h4>
+        <div class="ihf-form">
+          <label><input type="checkbox" id="ihf-fate-on"> 开启命运模块</label>
+          <label><input type="checkbox" id="ihf-fate-world"> 单开一栏「世界」记背景板大事</label>
+          <label><input type="checkbox" id="ihf-fate-acts"> 在场的人发行为清单(演过头就关掉)</label>
+          <label><input type="checkbox" id="ihf-fate-inner"> 行为清单里加一条「不写心理活动」</label>
+          <label><span class="ihf-lab">推演间隔</span>每隔 <input type="number" id="ihf-fate-every" min="1" max="99"> 层一次</label>
+          <label><span class="ihf-lab">浮出间隔</span>至少隔 <input type="number" id="ihf-fate-gap" min="1" max="99"> 层</label>
+          <label><span class="ihf-lab">开栏上限</span>最多 <input type="number" id="ihf-fate-npc" min="1" max="8"> 个人</label>
+          <button id="ihf-fate-save" class="ihf-btn ihf-primary">保存</button>
+          <div class="ihf-muted">念头原文只存在这儿,永远不发给模型。发出去的只有「在场时会」和当前那一档的「界」。</div>
+        </div>
+      </div>`,
+
+    shezhi: `
+      <div class="ihf-card">
+        <div class="ihf-form">
+          <label><input type="checkbox" id="ihf-enabled"> <b>开启插件</b></label>
+          <div class="ihf-muted">关掉就完全不插手,发给模型的东西一个字都不改。</div>
+          <label><span class="ihf-lab">档位</span><select id="ihf-tier"><option value="">跟着模型自动</option><option value="big">锁定大模型档</option><option value="small">锁定小模型档</option></select></label>
+          <label><input type="checkbox" id="ihf-recall-on"> 开启召回</label>
+          <label><span class="ihf-lab">召回查询</span><select id="ihf-qmode"><option value="split">分开用(推荐)</option><option value="concat">拼在一起</option></select></label>
+          <label><span class="ihf-lab">每层记账</span><select id="ihf-ledger"><option value="main-inline">主 API 随正文写</option><option value="sub-after">副 API 回复后补写</option><option value="off">不记</option></select></label>
+        </div>
+      </div>
+      <div class="ihf-card">
+        <h4>副 API(后台干活用)</h4>
+        <div class="ihf-form">
+          <label><span class="ihf-lab">用哪个</span><select id="ihf-sub"></select></label>
+          <div class="ihf-muted">从 API 管理器或酒馆的连接配置里选。请求经酒馆服务器发出、用酒馆密钥库里的 key,插件不碰也不存 key。</div>
+          <label><span class="ihf-lab">补记账用</span><select id="ihf-bf-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
+          <label><span class="ihf-lab">压时间线用</span><select id="ihf-tl-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
+          <label><input type="checkbox" id="ihf-tl-auto"> 压时间线用副 API 时,自动压</label>
+          <label><span class="ihf-lab">限速</span>每分钟最多 <input type="number" id="ihf-rpm" min="1" max="60"> 次</label>
+          <button id="ihf-save2" class="ihf-btn ihf-primary">保存设置</button>
+          <div class="ihf-muted">设置存在 user/files/infinite-human-fate.config.json,不进 settings.json;你手填的 key 不会被改动。</div>
+        </div>
+      </div>`,
+
+    bangzhu: `
+      <div class="ihf-card">
+        <h4>这插件在干嘛</h4>
+        <div class="ihf-muted">
+          聊天一长,模型就开始忘事、把人演回从前、让所有人随叫随到。
+          它把"记住什么、发多少、什么时候发"接管过来。<br><br>
+          <b>♾️ 无限</b>:最近的原文照发,再往前换成一层一句的摘要,更早的压成时间线一行一件事,
+          另外按你这句话的意思去把相干的旧楼捞回来。<br>
+          <b>👥 人类</b>:好感度、情绪、性格弧、约定账、物品账。
+          模型只写"+2 因为什么事",所有加减和分档都是这边算的,它一个数都碰不到。<br>
+          <b>🎲 命运</b>:NPC 和世界在背后自己过日子,踩中写死的条件才浮出到正文。
+        </div>
+      </div>
+      <div class="ihf-card">
+        <h4>第一次用</h4>
+        <div class="ihf-muted">
+          1. ⚙️ 里勾上<b>开启插件</b>。<br>
+          2. 挑一个<b>副 API</b>(补记账、压时间线、幕后推演都走它,省主 API 的额度和你的钱)。<br>
+          3. 想要向量召回的话,把硅基流动的 key 填进设置文件的 <code>siliconflow.key</code>。
+          不填也能用,只是召回退化成按专名找。<br>
+          4. 剩下的它自己会跑。哪儿不对就来这三页看,每个数旁边都写着是因为什么事加减的。
+        </div>
+      </div>
+      <div class="ihf-card">
+        <h4>它不动什么</h4>
+        <div class="ihf-muted">
+          聊天原文一个字不改,删减只发生在发出去之前的副本上。<br>
+          settings.json 一个字不写,数据和设置都在 user/files 自己的 json 里。<br>
+          正则、预设、酒馆本体,一概不碰。
+        </div>
+      </div>`,
+};
+
 function mountPanel() {
-    const html = `
+    const cfg = state.config?.ui ?? {};
+    ui = mountShell({
+        version: VERSION,
+        pos: cfg.ballPos ?? null,
+        theme: cfg.theme ?? 'night',
+        onMove: pos => saveUiPatch({ ballPos: pos }),
+        onTheme: theme => saveUiPatch({ theme }),
+        onShow: () => render(),
+    });
+    for (const [key, html] of Object.entries(PAGE_HTML)) {
+        const page = ui.page(key);
+        if (page) page.innerHTML = html;
+    }
+
+    $('#ihf-reload').on('click', () => openChat());
+    $('#ihf-backfill').on('click', () => startBackfill());
+    $('#ihf-timeline').on('click', () => startTimeline());
+    $('#ihf-stop').on('click', () => { state.jobs.stop = true; render(); });
+    $('#ihf-save, #ihf-save2').on('click', () => saveSettings());
+    $('#ihf-fate-ideas').on('click', () => startFateIdeas());
+    $('#ihf-fate-survey').on('click', () => startFateSurvey());
+    $('#ihf-fate-save').on('click', () => saveFateSettings());
+    $('#ihf-affinit').on('click', () => startAffinityInit());
+    $('#ihf-origins').on('click', () => startOrigins());
+    $('#ihf-breakif').on('click', () => startBreakIf());
+    $('#ihf-save-items').on('click', () => saveItemLists({
+        itemNever: parseWordList($('#ihf-never').val()),
+        itemCommon: parseWordList($('#ihf-common').val()),
+    }));
+    $(document).on('click', '.ihf-block', function () { addItemWord($(this).data('which'), String($(this).data('word'))); });
+    $(document).on('change', '.ihf-start', function () { setAffinityStart($(this).data('name'), $(this).val()); });
+
+    // 扩展抽屉里只留一句话和一个入口,别再往那儿堆东西(道长:堆在抽屉里太不方便了)
+    $('#extensions_settings2').append(`
 <div class="ihf-settings">
   <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
@@ -1255,109 +1432,27 @@ function mountPanel() {
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
-      <div id="ihf-status" class="ihf-status"></div>
+      <div class="ihf-status ihf-muted">平时用右边那颗 ♾️ 悬浮球,可以随便拖,靠边会自己缩进去一半。</div>
       <div class="ihf-actions">
-        <div id="ihf-reload" class="menu_button">重新对账</div>
-        <div id="ihf-backfill" class="menu_button">补记账</div>
-        <div id="ihf-timeline" class="menu_button">压时间线</div>
-        <div id="ihf-stop" class="menu_button" style="display:none">停止</div>
+        <div id="ihf-open" class="menu_button">打开面板</div>
       </div>
-      <details class="ihf-box">
-        <summary>设置</summary>
-        <div class="ihf-form">
-          <label><input type="checkbox" id="ihf-enabled"> <b>开启插件</b>(关掉就完全不插手,发给模型的东西一个字都不改)</label>
-          <label>档位 <select id="ihf-tier" class="text_pole"><option value="">跟着模型自动</option><option value="big">锁定大模型档</option><option value="small">锁定小模型档</option></select></label>
-          <label><input type="checkbox" id="ihf-recall-on"> 开启召回</label>
-          <label>召回查询 <select id="ihf-qmode" class="text_pole"><option value="split">分开用(推荐)</option><option value="concat">拼在一起</option></select></label>
-          <label>每层记账 <select id="ihf-ledger" class="text_pole"><option value="main-inline">主 API 随正文写</option><option value="sub-after">副 API 回复后补写</option><option value="off">不记</option></select></label>
-          <label>副 API <select id="ihf-sub" class="text_pole"></select></label>
-          <div class="ihf-muted">副 API 从 API 管理器或酒馆的连接配置里选,请求经酒馆服务器发出,用酒馆密钥库里的 key,插件不存 key。</div>
-          <label>补记账用 <select id="ihf-bf-backend" class="text_pole"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
-          <label>压时间线用 <select id="ihf-tl-backend" class="text_pole"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
-          <label><input type="checkbox" id="ihf-tl-auto"> 压时间线用副 API 时,自动压</label>
-          <label>每分钟最多 <input type="number" id="ihf-rpm" class="text_pole" min="1" max="60"> 次</label>
-          <div class="ihf-muted">人类模块,四块各管各的。角色卡自带好感度的话就把好感度那块关掉,免得两套打架。</div>
-          <label><input type="checkbox" id="ihf-mod-affinity"> 好感度</label>
-          <label><input type="checkbox" id="ihf-mod-emotion"> 情绪</label>
-          <label>情绪档 <select id="ihf-emotion" class="text_pole"><option value="major">只在重大事件后(推荐)</option><option value="all">全开(模拟真实世界)</option></select></label>
-          <label><input type="checkbox" id="ihf-mod-arc"> 性格弧</label>
-          <label><input type="checkbox" id="ihf-mod-promise"> 约定账</label>
-          <label><input type="checkbox" id="ihf-mod-item"> 物品账</label>
-          <div id="ihf-save" class="menu_button">保存设置</div>
-          <div class="ihf-muted">设置存在 user/files/infinite-human-fate.config.json,不进 settings.json;你手填的 key 不会被改动。</div>
-        </div>
-      </details>
-      <details class="ihf-box" id="ihf-tl-box">
-        <summary>时间线</summary>
-        <div id="ihf-tl-view" class="ihf-status"></div>
-      </details>
-      <details class="ihf-box" id="ihf-fate-box">
-        <summary>幕后(命运)</summary>
-        <div id="ihf-fate-view" class="ihf-status"></div>
-        <div class="ihf-actions">
-          <div id="ihf-fate-ideas" class="menu_button">立念头</div>
-          <div id="ihf-fate-survey" class="menu_button">跑一次推演</div>
-        </div>
-        <div class="ihf-form">
-          <label><input type="checkbox" id="ihf-fate-on"> 开启命运模块</label>
-          <label><input type="checkbox" id="ihf-fate-world"> 单开一栏「世界」记背景板大事</label>
-          <label><input type="checkbox" id="ihf-fate-acts"> 在场的人发行为清单(演过头就关掉)</label>
-          <label><input type="checkbox" id="ihf-fate-inner"> 行为清单里加一条「不写心理活动」</label>
-          <label>每隔 <input type="number" id="ihf-fate-every" class="text_pole" min="1" max="99"> 层推演一次</label>
-          <label>两次浮出至少隔 <input type="number" id="ihf-fate-gap" class="text_pole" min="1" max="99"> 层</label>
-          <label>最多给 <input type="number" id="ihf-fate-npc" class="text_pole" min="1" max="8"> 个人开栏</label>
-          <div id="ihf-fate-save" class="menu_button">保存命运设置</div>
-          <div class="ihf-muted">念头原文只存在这里,永远不发给模型。发出去的只有「在场时会」和「界」。</div>
-        </div>
-      </details>
-      <details class="ihf-box" id="ihf-people-box">
-        <summary>人物(好感 / 性格弧 / 情绪 / 约定)</summary>
-        <div id="ihf-people-view" class="ihf-status"></div>
-        <div class="ihf-actions">
-          <div id="ihf-affinit" class="menu_button">估开局好感</div>
-          <div id="ihf-origins" class="menu_button">摘性格原句</div>
-          <div id="ihf-breakif" class="menu_button">问破锚条件</div>
-        </div>
-        <div class="ihf-muted">数都是插件按各层的加减现算的,不存死值。改了楼、滑了 swipe,重新对账就跟着变。</div>
-        <details class="ihf-box">
-          <summary>物品禁词表</summary>
-          <div class="ihf-form">
-            <label>一律不记(吃的喝的抽的)
-              <textarea id="ihf-never" class="text_pole" rows="4" placeholder="一行一个,或者用逗号隔开"></textarea>
-            </label>
-            <div class="ihf-muted">两个字以上的词,名字里带上就算;一个字的词,要去掉量词后正好是它才算(不然"水"会把"墨水""水晶吊坠"也拦掉)。</div>
-            <label>只在换了人拿、或者丢了毁了时才记(手机钱包这类随身物)
-              <textarea id="ihf-common" class="text_pole" rows="4" placeholder="一行一个,或者用逗号隔开"></textarea>
-            </label>
-            <div id="ihf-save-items" class="menu_button">保存禁词表</div>
-            <div class="ihf-muted">上面表格里每样东西后面也有 [不记] [只在出事时记],点一下就加进来。改完立刻重算,不用重开聊天。</div>
-          </div>
-        </details>
-      </details>
+      <label class="checkbox_label"><input type="checkbox" id="ihf-ball-on"> 显示悬浮球</label>
     </div>
   </div>
-</div>`;
-    $('#extensions_settings2').append(html);
-    $('#ihf-reload').on('click', () => openChat());
-    $('#ihf-backfill').on('click', () => startBackfill());
-    $('#ihf-timeline').on('click', () => startTimeline());
-    $('#ihf-stop').on('click', () => { state.jobs.stop = true; render(); });
-    $('#ihf-save').on('click', () => saveSettings());
-    $('#ihf-tl-box').on('toggle', () => renderTimeline());
-    $('#ihf-people-box').on('toggle', () => renderPeople());
-    $('#ihf-fate-box').on('toggle', () => renderFate());
-    $('#ihf-fate-ideas').on('click', () => startFateIdeas());
-    $('#ihf-fate-survey').on('click', () => startFateSurvey());
-    $('#ihf-fate-save').on('click', () => saveFateSettings());
-    $('#ihf-affinit').on('click', () => startAffinityInit());
-    $('#ihf-save-items').on('click', () => saveItemLists({
-        itemNever: parseWordList($('#ihf-never').val()),
-        itemCommon: parseWordList($('#ihf-common').val()),
-    }));
-    $(document).on('click', '.ihf-block', function () { addItemWord($(this).data('which'), String($(this).data('word'))); });
-    $('#ihf-origins').on('click', () => startOrigins());
-    $(document).on('change', '.ihf-start', function () { setAffinityStart($(this).data('name'), $(this).val()); });
-    $('#ihf-breakif').on('click', () => startBreakIf());
+</div>`);
+    $('#ihf-open').on('click', () => ui.open());
+    $('#ihf-ball-on').on('change', function () {
+        const on = $(this).prop('checked');
+        ui.setBallVisible(on);
+        saveUiPatch({ ball: on });
+    });
+}
+
+/** 界面上那点偏好(球在哪、日夜)也存进设置文件,不进 settings.json */
+function saveUiPatch(patch) {
+    if (!state.config) return;
+    state.config.ui = { ...state.config.ui, ...patch };
+    saveConfigPatch({ ui: patch }, ctx().getRequestHeaders()).catch(e => console.warn(LOG, '界面偏好没存上', e));
 }
 
 jQuery(async () => {
@@ -1371,6 +1466,8 @@ jQuery(async () => {
     }
     updateTier(false);
     fillSettings();
+    ui.setBallVisible(state.config.ui?.ball !== false);
+    $('#ihf-ball-on').prop('checked', state.config.ui?.ball !== false);
     const { eventSource, eventTypes: et } = ctx();
     eventSource.on(et.CHAT_CHANGED, () => openChat());
     for (const ev of [et.MESSAGE_RECEIVED, et.MESSAGE_EDITED, et.MESSAGE_SWIPED, et.MESSAGE_DELETED, et.MESSAGE_UPDATED]) {
