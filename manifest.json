@@ -1,0 +1,12 @@
+{
+    "display_name": "无限人类命运",
+    "loading_order": 110,
+    "requires": [],
+    "optional": [],
+    "js": "index.js?v=0.6.0",
+    "css": "style.css?v=0.6.0",
+    "generate_interceptor": "ihf_interceptor",
+    "author": "@不如就叫我道长吧",
+    "version": "0.6.0",
+    "homePage": ""
+}

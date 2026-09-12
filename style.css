@@ -1,0 +1,76 @@
+/* 记账块:酒馆显示消息时会把 class 改成 custom-ihf-ledger(public/scripts/chats.js:1929),这里藏掉 */
+.custom-ihf-ledger {
+    display: none !important;
+}
+
+.ihf-status {
+    font-size: 0.9em;
+    line-height: 1.7;
+}
+
+.ihf-status .ihf-muted {
+    opacity: 0.6;
+    font-size: 0.9em;
+}
+
+.ihf-status .ihf-error {
+    color: var(--warning, #e0a040);
+}
+
+.ihf-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.ihf-box {
+    margin-top: 8px;
+}
+
+.ihf-box > summary {
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.ihf-form label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+    flex-wrap: wrap;
+}
+
+.ihf-form select.text_pole {
+    flex: 1;
+    min-width: 10em;
+}
+
+.ihf-form input[type="number"].text_pole {
+    width: 5em;
+}
+
+/* 物品行后面的 [不记] [只在出事时记],点一下加进禁词表 */
+.ihf-status .ihf-block {
+    cursor: pointer;
+    opacity: 0.55;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+.ihf-status .ihf-block:hover {
+    opacity: 1;
+    text-decoration: underline;
+}
+
+/* 禁词表那两个框要占满一行,不跟标签挤在一起 */
+.ihf-form label:has(textarea) {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.ihf-form textarea.text_pole {
+    width: 100%;
+    resize: vertical;
+    font-size: 0.9em;
+}
