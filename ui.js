@@ -64,8 +64,8 @@ const CSS = `
   --ihf-bg: #161225;
   --ihf-bg2: rgba(130,120,200,.08);
   --ihf-bg3: rgba(130,120,200,.15);
-  --ihf-text: #d8d4e8;
-  --ihf-text2: #9590b0;
+  --ihf-text: #e6e2f4;
+  --ihf-text2: #b6b0cf;
   --ihf-border: rgba(140,130,200,.2);
   --ihf-accent: #a78bfa;
   --ihf-input-bg: rgba(0,0,0,.3);
@@ -84,7 +84,7 @@ const CSS = `
   --ihf-bg2: rgba(120,90,50,.08);
   --ihf-bg3: rgba(120,90,50,.14);
   --ihf-text: #3d3427;
-  --ihf-text2: #7a6e5d;
+  --ihf-text2: #5f5444;
   --ihf-border: rgba(120,90,50,.2);
   --ihf-accent: #8b6914;
   --ihf-input-bg: rgba(255,255,255,.5);
@@ -167,6 +167,25 @@ const CSS = `
 .ihf-form select { flex: 1 1 9em; min-width: 8em; }
 .ihf-form input[type="number"] { width: 4.5em; }
 .ihf-form textarea { width: 100%; resize: vertical; }
+/* 输入框的字:酒馆自己的样式会把字压暗,这里钉死(9/18 物品禁词表看不清) */
+#ihf-panel textarea, #ihf-panel input[type="text"], #ihf-panel input[type="number"], #ihf-panel input[type="password"], #ihf-panel select {
+  color: var(--ihf-text) !important; opacity: 1 !important; line-height: 1.6;
+}
+#ihf-panel textarea::placeholder, #ihf-panel input::placeholder { color: var(--ihf-text2); opacity: .8; }
+/* 命运页:一人一张卡片,标签和内容分两列(9/18 道长:这些字看得好费劲) */
+.ihf-thread { background: var(--ihf-bg2); border: 1px solid var(--ihf-border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; font-size: .92em; line-height: 1.7; }
+.ihf-thread-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 1.08em; }
+.ihf-thread-head .ihf-btn { margin-left: auto; }
+.ihf-chip { display: inline-block; font-size: .78em; padding: 0 7px; border-radius: 9px; background: var(--ihf-bg3); color: var(--ihf-text2); margin-right: 6px; white-space: nowrap; vertical-align: 1px; }
+.ihf-idea { border-top: 1px dashed var(--ihf-border); padding-top: 7px; margin-top: 7px; }
+.ihf-idea-title { font-weight: bold; margin-bottom: 4px; }
+.ihf-kv { display: grid; grid-template-columns: 6.2em 1fr; gap: 8px; margin: 3px 0; }
+.ihf-k { color: var(--ihf-text2); white-space: nowrap; }
+.ihf-v { min-width: 0; }
+.ihf-list { margin: 0; padding-left: 1.1em; }
+.ihf-list li { margin: 2px 0; }
+.ihf-list li.ihf-now { color: var(--ihf-accent); }
+.ihf-note { background: var(--ihf-bg3); border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
 /* 全景表 */
 .ihf-scroll { max-height: 40vh; overflow: auto; border: 1px solid var(--ihf-border); border-radius: 8px; }
 .ihf-table { width: 100%; border-collapse: collapse; font-size: .86em; line-height: 1.5; }

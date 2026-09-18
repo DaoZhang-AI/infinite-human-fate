@@ -236,7 +236,10 @@ export function parseFateSurvey(text) {
 const FATE_IDEA_SYSTEM = `你是资料员。读下面这个人的设定和已经发生的剧情,写出他**长期惦记着**的事。
 
 规则:
-1. 最多 3 条,**有几条写几条,一条都看不出来就回"无"**。不要为了凑数编。
+1. 写 1 到 3 条。设定里就算只给了这个人一两句(身份、跟谁什么关系、什么处境),
+   也要**照他的身份和处境推出他自己会惦记的事**:合情合理、跟设定不冲突就行,这不算瞎编。
+   比如设定只说"他是记者,有篇稿子被压了",就可以推出他一直惦记那篇稿子还能不能见报。
+   只有连这个人是谁都看不出来的时候,才回"无"。
 2. 每条都要配这几样:
    - 触发情形:什么场面出现时他会真的动手。必须是一件具体的、看得见的事,
      写明他当众或当着谁做了什么。写不出来就写"无"(那这条就只在背后影响他,不会浮出来)。
@@ -271,16 +274,65 @@ const FATE_IDEA_SYSTEM = `你是资料员。读下面这个人的设定和已经
  * traits 是这个人的性格原句(性格弧那块从角色卡摘的那段),梯子的高度照它定
  * (道长定的:本来就脸皮厚的人,当着别人的面也照样来,梯子高度要照性格定)。
  */
-export function buildFateIdeaMessages({ name, card, story, traits, tierNames = [] }) {
+/** 设定里跟这个人有关的段落(按空行或标签切段,提到名字的留下)。一段都没有就返回空 */
+export function excerptAbout(card, name, max = 3000) {
+    const parts = String(card ?? '').split(/\n\s*\n|(?=<[^/][^>]{0,40}>)/).map(s => s.trim()).filter(Boolean);
+    const hit = parts.filter(p => p.includes(name));
+    return clip(hit.join('\n\n'), max);
+}
+
+/**
+ * 立念头。9/18 的教训:卡的设定整篇都在写主角,只丢"要写谁 = 某 NPC"进去,
+ * 模型会把主角的心事写到 NPC 头上(父亲那栏写的全是主角的事)。
+ * 所以:①明说谁是主角、谁是用户,念头的主语只能是这个 NPC;②设定先挑提到他的段落,整篇只作背景。
+ */
+export function buildFateIdeaMessages({ name, card, story, traits, tierNames = [], owners = [], userName = '' }) {
     const sys = FATE_IDEA_SYSTEM.replace('{{TIERS}}', tierNames.join('、') || '好感由低到高的各档');
+    const about = excerptAbout(card, name);
+    const ownerLine = owners.length
+        ? `【注意】这张卡的主角是${owners.join('、')},用户扮演的是${userName || '用户'}。这一栏写的是${name},不是${owners.join('、')}。`
+            + `每条念头的主语都必须是${name}本人,写${name}自己惦记的事;${owners.join('、')}在念头里只能作为别人出现。`
+            + `${name}的心事可以跟${owners.join('、')}有关(比如当爹的惦记儿子),但惦记的人是${name},写的是${name}的心思和${name}会做的事;`
+            + `别把${owners.join('、')}自己的心事搬过来。`
+            + `\n写完每条自己核对一遍:这件事里动手的、惦记的,是不是${name}本人?用的东西、去的地方,是不是${name}自己的?`
+            + `只要这条换成${owners.join('、')}来做也说得通(比如用的是${owners.join('、')}的手机、办的是${owners.join('、')}的公事),就是写错了人,删掉重写。`
+        : '';
     const body = [
         `【要写谁】${name}`,
-        traits ? `【他是什么性子(照这个定梯子的高度)】\n${clip(traits, 800)}` : '',
-        card ? `【设定】\n${clip(card, 4000)}` : '',
+        ownerLine,
+        traits ? `【${name}是什么性子(照这个定梯子的高度)】\n${clip(traits, 800)}` : '',
+        about ? `【设定里提到${name}的地方】\n${about}` : `【设定里提到${name}的地方】(没有)`,
+        card ? `【整张卡的设定(只当背景,别把里面主角的心事写给${name})】\n${clip(card, 2500)}` : '',
         story ? `【已经发生的剧情】\n${clip(story, 3000)}` : '',
     ].filter(Boolean).join('\n\n');
     return [
         { role: 'system', content: sys },
+        { role: 'user', content: body },
+    ];
+}
+
+const FATE_WORLD_SYSTEM = `你是资料员。读下面的设定和已经发生的剧情,写出这个世界里**正在酝酿、还没爆出来的大事**:
+行业里的风向、城里的新闻、某个产品或某个人要出事、行情要变,这一类背景板上的事。
+
+规则:
+1. 最多 3 条,有几条写几条,看不出来就回"无"。
+2. **不写任何一个人的心事**,尤其不写主角和用户之间的事。这里只写外面的世界。
+3. 每条配一行「触发情形」:什么时候会爆出来,写一件具体的、看得见的事。
+4. 只用材料里出现过的地名、机构名,可以不提具体人。按世界观来,古代就是邸报茶馆,现代就是新闻热搜,别写错时代。
+
+格式,一条一段,不要解释:
+① 正在酝酿的事
+触发情形: …`;
+
+/** 「世界」那一栏立念头:写大势,不写人,不要梯子(9/18 用写人的提示词,世界栏写成了主角的心事) */
+export function buildFateWorldMessages({ card, story, owners = [] }) {
+    const body = [
+        owners.length ? `【注意】主角是${owners.join('、')},这里不写他们的心事。` : '',
+        card ? `【设定】\n${clip(card, 4000)}` : '',
+        story ? `【已经发生的剧情】\n${clip(story, 3000)}` : '',
+    ].filter(Boolean).join('\n\n');
+    return [
+        { role: 'system', content: FATE_WORLD_SYSTEM },
         { role: 'user', content: body },
     ];
 }

@@ -57,7 +57,7 @@ export const COMMON = '共同';
 export const WORLD = '世界';
 
 export function emptyFate() {
-    return { threads: {}, lastRunFloor: -1, lastRunDay: -1, lastSurfaceFloor: -9999, pending: null };
+    return { threads: {}, lastRunFloor: -1, lastRunDay: -1, lastSurfaceFloor: -9999, pending: null, ideasVer: 2 };
 }
 
 export function emptyThread(name, kind = 'npc') {

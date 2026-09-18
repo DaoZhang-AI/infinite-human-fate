@@ -18,7 +18,7 @@ import { formatDate } from './core/calendar.js';
 import { fingerprint } from './core/fingerprint.js';
 import { alignCoreToRaw, buildMemoryBlock, planZones } from './core/assemble.js';
 import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVec, nameIdf, normalize, pickPool, scoreCandidates, selectRecall, vecFresh } from './core/recall.js';
-import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js';
+import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateWorldMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js';
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
 import { mountShell } from './ui.js';
@@ -28,7 +28,7 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.4';
+const VERSION = '0.9.5';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -576,6 +576,17 @@ function ensureThreads() {
     const cfg = state.config.fate;
     const fate = state.memory.fate;
     let added = 0;
+    // v0.9.5 之前立的念头会把卡主的心事写到 NPC 和「世界」头上,清掉一次重立(已经浮出过的留着)
+    if ((fate.ideasVer ?? 1) < 2) {
+        for (const t of Object.values(fate.threads)) {
+            if ((t.ideas ?? []).some(it => Number.isFinite(it.surfacedAt))) continue;
+            t.ideas = [];
+            t.ideasAsked = false;
+        }
+        if (fate.pending && !Number.isFinite(fate.pending.surfacedAt)) fate.pending = null;
+        fate.ideasVer = 2;
+        added++;
+    }
     // 旧版把卡主也开了栏,删掉(连同它的念头和排队中的浮出)
     for (const n of cardOwners()) {
         if (fate.threads[n]?.kind === 'npc') {
@@ -613,11 +624,17 @@ async function startFateIdeas(which = null) {
     if (!todo.length) return toastr.info('没有要立念头的栏', TITLE);
     const card = cardDescription();
     await runJob('立念头', todo, async t => {
-        const out = await callModel(buildFateIdeaMessages({
-            name: t.name, card, story: recentStory(10),
-            traits: state.memory.origins?.[t.name] ?? '',
-            tierNames: (state.config.people.affinityTiers ?? []).map(x => x.name),
-        }), backend);
+        const story = recentStory(10);
+        const owners = cardOwners();
+        // 世界那栏写大势不写人;人那栏明说谁是主角,念头主语只能是这个 NPC(9/18 两栏都写成了主角的心事)
+        const messages = t.kind === 'world'
+            ? buildFateWorldMessages({ card, story, owners })
+            : buildFateIdeaMessages({
+                name: t.name, card, story, owners, userName: ctx().name1 || '',
+                traits: state.memory.origins?.[t.name] ?? '',
+                tierNames: (state.config.people.affinityTiers ?? []).map(x => x.name),
+            });
+        const out = await callModel(messages, backend);
         t.ideas = parseFateIdeas(out, state.config.fate.maxIdeas ?? 3);
         t.ideasAsked = true; // 问过就别反复问,哪怕一条都没立出来
         scheduleSave();
@@ -1123,42 +1140,50 @@ function renderFate() {
     if (cfg?.enabled === false) { el.innerHTML = '<span class="ihf-muted">命运模块关着</span>'; return; }
     const list = Object.values(fate?.threads ?? {});
     if (!list.length) {
-        el.innerHTML = '<span class="ihf-muted">还没有幕后各栏。等开局好感估出人名,或者直接点「立念头」</span>';
+        el.innerHTML = '<span class="ihf-muted">还没有幕后各栏。开局估出人名后会自动开栏、自动定念头。</span>';
         return;
     }
+    // 9/18 道长嫌"看得好费劲":一人一张卡片,标签和内容分两列,当前那一档高亮,字调亮
     const out = [];
+    const kv = (label, html) => `<div class="ihf-kv"><div class="ihf-k">${label}</div><div class="ihf-v">${html}</div></div>`;
     if (fate.pending) {
-        out.push(`<div class="ihf-error">正等着浮出:${escapeHtml(fate.pending.what)}(已挂 ${fate.pending.tries} 层)</div>`);
+        out.push(`<div class="ihf-note">⏳ 这一两层会浮到正文里:${escapeHtml(fate.pending.what)}(已经挂了 ${fate.pending.tries} 层)</div>`);
     }
-    out.push(`<div class="ihf-muted">上次推演:第 ${fate.lastRunFloor < 0 ? '还没跑过' : fate.lastRunFloor + ' 层'} · 上次浮出:第 ${fate.lastSurfaceFloor < 0 ? '还没有' : fate.lastSurfaceFloor + ' 层'}</div>`);
+    out.push(`<div class="ihf-muted">上次幕后推演:${fate.lastRunFloor < 0 ? '还没跑过' : '第 ' + fate.lastRunFloor + ' 层'} · 上次浮出:${fate.lastSurfaceFloor < 0 ? '还没有' : '第 ' + fate.lastSurfaceFloor + ' 层'}</div>`);
+    const tiers = state.config.people.affinityTiers ?? [];
+    const useAff = state.config.people.modules?.affinity !== false;
     for (const t of list) {
-        out.push(`<div><b>【${escapeHtml(t.name)}】</b>${t.kind === 'world' ? ' <span class="ihf-muted">世界</span>' : t.kind === 'common' ? ' <span class="ihf-muted">多方交汇</span>' : ''}</div>`);
-        if (t.now) out.push(`<div>　当前行动:${escapeHtml(t.now)}</div>`);
+        const kind = t.kind === 'world' ? '世界大势' : t.kind === 'common' ? '多方交汇' : 'NPC';
+        const redo = t.kind === 'common' ? '' : `<button class="ihf-btn ihf-fate-redo" data-name="${escapeHtml(t.name)}" title="清掉这一栏的念头,重新让模型定">这栏重来</button>`;
+        const card = [`<div class="ihf-thread-head"><b>${escapeHtml(t.name)}</b><span class="ihf-chip">${kind}</span>${redo}</div>`];
+        if (t.now) card.push(kv('现在在做', escapeHtml(t.now)));
+        if (!t.ideas?.length && t.kind !== 'common') {
+            card.push(`<div class="ihf-muted">${t.ideasAsked ? '问过了,材料里看不出这一栏惦记什么' : '还没定念头,开局会自动定'}</div>`);
+        }
         t.ideas?.forEach((it, i) => {
-            const tag = it.state !== '进行中' ? `(${it.state})` : '';
-            out.push(`<div>　念头${i + 1}${tag}:${escapeHtml(it.text)}</div>`);
-            out.push(`<div class="ihf-muted">　　何时会付诸行动:${escapeHtml(it.actWhen || '没写,这条永远不会浮出')}</div>`);
-            if (it.acts?.length) out.push(`<div class="ihf-muted">　　在场时会:${escapeHtml(it.acts.join(' / '))}</div>`);
-            const tiers = state.config.people.affinityTiers ?? [];
+            const tag = it.state !== '进行中' ? `<span class="ihf-chip">${escapeHtml(it.state)}</span>` : '';
+            const idea = [`<div class="ihf-idea-title">心事 ${i + 1}:${escapeHtml(it.text)}${tag}</div>`];
+            idea.push(kv(t.kind === 'world' ? '什么时候爆' : '什么时候会做', escapeHtml(it.actWhen || '没写,这条只在背后影响,不会浮到正文')));
+            if (it.acts?.length) idea.push(kv('碰上主角时', `<ul class="ihf-list">${it.acts.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`));
             const steps = limitSteps(it, tiers);
-            if (!steps.length) {
-                out.push('<div class="ihf-muted">　　界:没写,所以这条的行为清单不发</div>');
-            } else {
-                const useAff = state.config.people.modules?.affinity !== false;
+            if (steps.length) {
                 const now = currentLimit(it, {
                     affinity: state.view?.people?.[t.name]?.affinity ?? 0,
                     floors: useAff ? 0 : coPresence(state.view?.rows, t.name),
                     tiers, useAffinity: useAff, stepEvery: state.config.fate.stepEveryFloors ?? 15,
                 });
-                for (const st of steps) {
-                    const on = st === now ? ' ← 现在在这一档' : '';
-                    out.push(`<div class="ihf-muted">　　界·${escapeHtml(st.tier || '无门槛')}:${escapeHtml(st.text)}${on}</div>`);
-                }
-                if (!useAff) out.push(`<div class="ihf-muted">　　(好感度关着,这条梯子改按同场层数爬,现在 ${coPresence(state.view?.rows, t.name)} 层,每 ${state.config.fate.stepEveryFloors ?? 15} 层升一档)</div>`);
+                const ladder = steps.map(st => `<li class="${st === now ? 'ihf-now' : ''}"><span class="ihf-chip">${escapeHtml(st.tier || '无门槛')}</span>${escapeHtml(st.text)}${st === now ? ' <b>← 现在</b>' : ''}</li>`).join('');
+                const note = useAff ? '' : `<div class="ihf-muted">好感度关着,改按同场层数往上爬:现在 ${coPresence(state.view?.rows, t.name)} 层,每 ${state.config.fate.stepEveryFloors ?? 15} 层升一档</div>`;
+                idea.push(kv('分寸', `<ul class="ihf-list">${ladder}</ul>${note}`));
+            } else if (t.kind !== 'world') {
+                idea.push(kv('分寸', '<span class="ihf-muted">没写,所以这条碰上主角时怎么做不会发给模型</span>'));
             }
-            if (it.inPublic) out.push(`<div class="ihf-muted">　　有别人在时:${escapeHtml(it.inPublic)}</div>`);
+            if (it.inPublic) idea.push(kv('有旁人在时', escapeHtml(it.inPublic)));
+            card.push(`<div class="ihf-idea">${idea.join('')}</div>`);
         });
-        for (const l of (t.log ?? []).slice(-6)) out.push(`<div class="ihf-muted">　　Day${l.day} ${escapeHtml(l.text)}</div>`);
+        const log = (t.log ?? []).slice(-6);
+        if (log.length) card.push(kv('这几天', `<ul class="ihf-list">${log.map(l => `<li><span class="ihf-muted">Day${l.day}</span> ${escapeHtml(l.text)}</li>`).join('')}</ul>`));
+        out.push(`<div class="ihf-thread">${card.join('')}</div>`);
     }
     // 比对用的"本来就有的字":卡的设定 + 最新两层之前的正文,各截一段,够用又不卡
     const chatAll = ctx().chat ?? [];
@@ -1754,6 +1779,15 @@ function mountPanel() {
     $('#ihf-rerank-fetch').on('click', () => onFetchModels('rerank'));
     $('#ihf-via').on('change', () => renderRelayState());
     $('#ihf-fate-ideas').on('click', () => startFateIdeas());
+    $(document).on('click', '#ihf-fate-view .ihf-fate-redo', function () {
+        const th = state.memory?.fate?.threads?.[String($(this).data('name'))];
+        if (!th) return;
+        th.ideas = [];
+        th.ideasAsked = false;
+        if (state.memory.fate.pending?.name === th.name) state.memory.fate.pending = null;
+        scheduleSave();
+        startFateIdeas();
+    });
     $('#ihf-fate-survey').on('click', () => startFateSurvey());
     $('#ihf-fate-save').on('click', () => saveFateSettings());
     $('#ihf-affinit').on('click', () => startAffinityInit());
