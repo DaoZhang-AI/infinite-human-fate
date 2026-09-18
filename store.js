@@ -30,10 +30,6 @@ export const DEFAULT_CONFIG = {
         rerank: { url: '', key: '', model: '', models: [] },
         via: 'auto',
     },
-    /** 随机角色锁定的规则,按卡分:{ 'char:头像文件名' | 'group:id': [{label, match, tag}] }。
-     *  label = 叫什么(女二),match = 那条随机指令里独一无二的一句(用来在上下文里找到并藏掉它),
-     *  tag = 卡要求模型输出的档案标签名(有就按标签抓,没有就让副 API 提取)。档案本身存记忆文件 locks */
-    locks: { rules: {} },
     ledger: {
         /** main-inline = 主 API 随正文写;sub-after = 每层回复后让副 API 补写;off = 不记 */
         mode: 'main-inline',
@@ -247,9 +243,6 @@ export function mergeMemory(local, remote) {
         origins: { ...(isPlainObject(remote.origins) ? remote.origins : {}), ...(isPlainObject(local.origins) ? local.origins : {}) },
         anchors: { ...(isPlainObject(remote.anchors) ? remote.anchors : {}), ...(isPlainObject(local.anchors) ? local.anchors : {}) },
         affinityStart: { ...(isPlainObject(remote.affinityStart) ? remote.affinityStart : {}), ...(isPlainObject(local.affinityStart) ? local.affinityStart : {}) },
-        // 随机角色档案:按角色名取并集,本地优先。「重新摇」不删键、只清空 profile,所以远端旧档案不会灌回来
-        locks: { ...(isPlainObject(remote.locks) ? remote.locks : {}), ...(isPlainObject(local.locks) ? local.locks : {}) },
-        lockChecked: { ...(isPlainObject(remote.lockChecked) ? remote.lockChecked : {}), ...(isPlainObject(local.lockChecked) ? local.lockChecked : {}) },
         // 幕后是存死的状态不是折算出来的,两边都写过就留较新的那份整份,别逐栏拼(拼出来会前后矛盾)
         fate: (local.fate?.lastRunFloor ?? -1) >= (remote.fate?.lastRunFloor ?? -1) ? local.fate : remote.fate,
         affinityInitAt: local.affinityInitAt ?? remote.affinityInitAt ?? 0,
