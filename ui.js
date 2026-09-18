@@ -176,6 +176,10 @@ const CSS = `
 .ihf-thread { background: var(--ihf-bg2); border: 1px solid var(--ihf-border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; font-size: .92em; line-height: 1.7; }
 .ihf-thread-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 1.08em; }
 .ihf-thread-head .ihf-btn { margin-left: auto; }
+/* char / NPC 角标,点一下切换(道长 9/18) */
+.ihf-role { cursor: pointer; border: 1px solid var(--ihf-border); }
+.ihf-role:hover { color: var(--ihf-text); }
+.ihf-role-char { background: var(--ihf-accent); color: #fff; border-color: var(--ihf-accent); }
 .ihf-chip { display: inline-block; font-size: .78em; padding: 0 7px; border-radius: 9px; background: var(--ihf-bg3); color: var(--ihf-text2); margin-right: 6px; white-space: nowrap; vertical-align: 1px; }
 .ihf-idea { border-top: 1px dashed var(--ihf-border); padding-top: 7px; margin-top: 7px; }
 .ihf-idea-title { font-weight: bold; margin-bottom: 4px; }

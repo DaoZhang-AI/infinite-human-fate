@@ -250,6 +250,8 @@ export function mergeMemory(local, remote) {
         origins: { ...(isPlainObject(remote.origins) ? remote.origins : {}), ...(isPlainObject(local.origins) ? local.origins : {}) },
         anchors: { ...(isPlainObject(remote.anchors) ? remote.anchors : {}), ...(isPlainObject(local.anchors) ? local.anchors : {}) },
         affinityStart: { ...(isPlainObject(remote.affinityStart) ? remote.affinityStart : {}), ...(isPlainObject(local.affinityStart) ? local.affinityStart : {}) },
+        // 她给谁标了 char / NPC,两边取并集,本地优先
+        roles: { ...(isPlainObject(remote.roles) ? remote.roles : {}), ...(isPlainObject(local.roles) ? local.roles : {}) },
         // 幕后是存死的状态不是折算出来的,两边都写过就留较新的那份整份,别逐栏拼(拼出来会前后矛盾)
         fate: (local.fate?.lastRunFloor ?? -1) >= (remote.fate?.lastRunFloor ?? -1) ? local.fate : remote.fate,
         affinityInitAt: local.affinityInitAt ?? remote.affinityInitAt ?? 0,

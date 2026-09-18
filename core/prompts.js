@@ -157,7 +157,8 @@ export function parseAffinityInit(text) {
 
 /* ---------------- 第三期:命运 ---------------- */
 
-const FATE_SURVEY_SYSTEM = `你是记录员。下面这个人这几天不在 char(这张卡的主要人物)和 {{user}}(用户扮演的人)身边,你要写他这几天自己的日子。
+const FATE_SURVEY_SYSTEM = `你是记录员。下面这个人这几天不在 {{user}}(用户扮演的人)身边,也不在正文这一场里,你要写他这几天自己的日子。`
+    + `(称呼:char = 这张卡的主要人物,NPC = 次要人物。)
 
 规则:
 1. **绝大部分是过日子**:吃饭、上班、赶工、跟人闲扯、发呆、处理麻烦事。
@@ -176,7 +177,7 @@ const FATE_SURVEY_SYSTEM = `你是记录员。下面这个人这几天不在 cha
 - …`;
 
 /** 幕后推演:一个人一个人地问(道长:分开写,不然模型会把所有事糊在一起) */
-export function buildFateSurveyMessages({ name, kind, card, ideas = [], recentLog = '', story = '', days = 1 }) {
+export function buildFateSurveyMessages({ name, kind, card, ideas = [], recentLog = '', story = '', days = 1, isChar = false }) {
     const wants = ideas
         .map((it, i) => `${i + 1}) ${it.text}`)
         .join('\n');
@@ -184,7 +185,9 @@ export function buildFateSurveyMessages({ name, kind, card, ideas = [], recentLo
         ? '这不是某个人,是"外面的世界"。写这几天外头在传什么、出了什么大事(某个东西火了、某人塌了、行情变了)。"此刻"写外面此刻在传什么。'
         : kind === 'common'
             ? '这一栏专收好几个人搅在一起的事。只写"这几天",不写"此刻"。'
-            : '';
+            : isChar
+                ? '这个人是 char(主要人物)之一,这几天不在 {{user}} 身边。照他自己的身份和处境写他过的日子。'
+                : '';
     const body = [
         `【这一栏是谁】${name}`,
         who,

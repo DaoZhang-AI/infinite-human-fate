@@ -205,9 +205,10 @@ export function pushLog(thread, day, lines, max = 30) {
  * 治的是"用户一打电话,那个 NPC 秒接还全程配合"。后面那句硬话必须跟着,
  * 否则模型会主动把这些人拉进场。
  */
-export function buildNowPrompt(fate, cfg) {
+export function buildNowPrompt(fate, cfg, present = new Set()) {
+    // 在场的人不发:他们就在正文里,不用告诉模型他在别处干嘛
     const rows = Object.values(fate.threads ?? {})
-        .filter(t => t.kind !== 'common' && t.now)
+        .filter(t => t.kind !== 'common' && t.now && !present.has(t.name))
         .slice(0, (cfg.maxNpc ?? 4) + 1);
     if (!rows.length) return '';
     return [
