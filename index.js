@@ -22,13 +22,13 @@ import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages,
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
 import { mountShell } from './ui.js';
-import { COMMON, WORLD, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
+import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.5';
+const VERSION = '0.9.6';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -172,6 +172,7 @@ function refresh(forceSave = false) {
     if (state.view.added || (forceSave && !state.memory.updated)) scheduleSave();
     if (state.config.fate?.enabled !== false && state.memory.fate) ensureThreads();
     settleFate();
+    checkWorldDue();
     render();
     ensureVectors();
 }
@@ -620,7 +621,8 @@ async function startFateIdeas(which = null) {
     const backend = backendOf(which ?? state.config.jobs.backfillBackend);
     if (!backend) return toastr.warning('立念头选了副 API,但还没选是哪个连接配置', TITLE);
     ensureThreads();
-    const todo = Object.values(state.memory.fate.threads).filter(t => t.kind !== 'common' && !t.ideas.length && !t.ideasAsked);
+    const todo = Object.values(state.memory.fate.threads).filter(t => t.kind !== 'common' && !t.ideasAsked
+        && (t.kind === 'world' ? worldLive(t).length < Math.max(1, state.config.fate.worldCount ?? 3) : !t.ideas.some(it => it.state === '进行中')));
     if (!todo.length) return toastr.info('没有要立念头的栏', TITLE);
     const card = cardDescription();
     await runJob('立念头', todo, async t => {
@@ -628,14 +630,22 @@ async function startFateIdeas(which = null) {
         const owners = cardOwners();
         // 世界那栏写大势不写人;人那栏明说谁是主角,念头主语只能是这个 NPC(9/18 两栏都写成了主角的心事)
         const messages = t.kind === 'world'
-            ? buildFateWorldMessages({ card, story, owners })
+            ? buildFateWorldMessages({
+                card, story, owners,
+                count: Math.max(1, (state.config.fate.worldCount ?? 3) - worldLive(t).length),
+                existing: worldLive(t).map(it => it.text),
+            })
             : buildFateIdeaMessages({
                 name: t.name, card, story, owners, userName: ctx().name1 || '',
                 traits: state.memory.origins?.[t.name] ?? '',
                 tierNames: (state.config.people.affinityTiers ?? []).map(x => x.name),
             });
         const out = await callModel(messages, backend);
-        t.ideas = parseFateIdeas(out, state.config.fate.maxIdeas ?? 3);
+        // 已经浮出过的留着,事件影响力那张图要用;新的接在后面
+        // 世界栏:在酝酿的留着,补上缺的那几件;人那栏:爆过的留着,其余换成新的
+        const keep = t.kind === 'world' ? (t.ideas ?? []) : (t.ideas ?? []).filter(it => Number.isFinite(it.surfacedAt));
+        const max = t.kind === 'world' ? Math.max(1, (state.config.fate.worldCount ?? 3) - worldLive(t).length) : (state.config.fate.maxIdeas ?? 3);
+        t.ideas = [...keep, ...parseFateIdeas(out, max)];
         t.ideasAsked = true; // 问过就别反复问,哪怕一条都没立出来
         scheduleSave();
     });
@@ -679,6 +689,41 @@ async function startFateSurvey(which = null) {
     scheduleSave();
 }
 
+/**
+ * 世界大事(道长 9/18):同时酝酿 worldCount 件,每隔 worldDueMin~worldDueMax 层必然爆一件,一次只爆一件,随机挑。
+ * 节奏插件自己数,不靠副 API 推演去"判断时机"(世界大事的触发都在幕后,正文里等不到)。
+ * 到点那层模型没写出来,settlePending 会撤回,过浮出间隔再挂;写出来了(settleFate 结案)才排下一件。
+ * 正在酝酿的不够 worldCount 件,就标成"没问过",下一轮自动补。
+ */
+function worldLive(world) {
+    return (world?.ideas ?? []).filter(it => it.state === '进行中');
+}
+
+function checkWorldDue() {
+    const fate = state.memory?.fate;
+    const cfg = state.config?.fate;
+    if (!fate || cfg?.enabled === false || !state.view) return;
+    const world = Object.values(fate.threads ?? {}).find(t => t.kind === 'world');
+    if (!world) return;
+    const floor = state.view.rows.length;
+    let dirty = false;
+    if (!Number.isFinite(fate.worldNextFloor)) {
+        fate.worldNextFloor = nextWorldFloor(floor, cfg);
+        dirty = true;
+    }
+    if (world.ideasAsked && worldLive(world).length < Math.max(1, cfg.worldCount ?? 3)) {
+        world.ideasAsked = false;
+        dirty = true;
+    }
+    const i = pickWorldIdea(fate, world, floor, cfg);
+    if (i >= 0) {
+        fate.pending = makePending(world, i, floor);
+        console.info(LOG, '世界大事到点,这一层爆出来:', fate.pending.what);
+        dirty = true;
+    }
+    if (dirty) scheduleSave();
+}
+
 /** 每层收尾:模型写了幕后✓ 就结案,连挂几层没写就撤回水下 */
 function settleFate() {
     const fate = state.memory?.fate;
@@ -686,7 +731,9 @@ function settleFate() {
     const floor = state.view.rows.length;
     const done = (state.view.rows ?? []).slice(-3).flatMap(r => r.record?.fateDone ?? []);
     const what = fate.pending.what;
+    const wasWorld = fate.pending.kind === 'world';
     const res = settlePending(fate, state.config.fate, floor, done);
+    if (res.cleared && wasWorld) fate.worldNextFloor = nextWorldFloor(floor, state.config.fate);
     if (res.cleared) {
         console.info(LOG, '幕后已浮出到正文:', what);
         scheduleSave();
@@ -743,8 +790,11 @@ function autoJobs() {
     }
     if (cfg.fate?.enabled === false) return;
     ensureThreads();
-    if (Object.values(state.memory.fate.threads).some(t => t.kind !== 'common' && !t.ideas.length && !t.ideasAsked)
-        && tryOnce('ideas', startFateIdeas)) return;
+    // 世界栏的事爆完会重新标成没问过,按爆过几件分开计次,不然一场里第三次补新事会被两次上限拦住
+    const surfaced = Object.values(state.memory.fate.threads).reduce((n, t) => n + (t.ideas ?? []).filter(it => Number.isFinite(it.surfacedAt)).length, 0);
+    if (Object.values(state.memory.fate.threads).some(t => t.kind !== 'common' && !t.ideasAsked
+        && (t.kind === 'world' ? worldLive(t).length < Math.max(1, cfg.fate.worldCount ?? 3) : !t.ideas.some(it => it.state === '进行中')))
+        && tryOnce('ideas' + surfaced, startFateIdeas)) return;
     if (sub && needsSurvey(state.memory.fate, cfg.fate, state.view.rows.length, state.view.lastDay)) startFateSurvey('sub');
 }
 
@@ -1120,6 +1170,9 @@ async function saveFateSettings() {
                 everyFloors: num('#ihf-fate-every', 1, 99, 9),
                 surfaceGap: num('#ihf-fate-gap', 1, 99, 12),
                 maxNpc: num('#ihf-fate-npc', 1, 8, 4),
+                worldCount: num('#ihf-fate-world-n', 1, 8, 3),
+                worldDueMin: num('#ihf-fate-due-min', 3, 200, 15),
+                worldDueMax: Math.max(num('#ihf-fate-due-min', 3, 200, 15), num('#ihf-fate-due-max', 3, 300, 40)),
             },
         }, ctx().getRequestHeaders());
         state.config = await loadConfig();
@@ -1156,14 +1209,27 @@ function renderFate() {
         const kind = t.kind === 'world' ? '世界大势' : t.kind === 'common' ? '多方交汇' : 'NPC';
         const redo = t.kind === 'common' ? '' : `<button class="ihf-btn ihf-fate-redo" data-name="${escapeHtml(t.name)}" title="清掉这一栏的念头,重新让模型定">这栏重来</button>`;
         const card = [`<div class="ihf-thread-head"><b>${escapeHtml(t.name)}</b><span class="ihf-chip">${kind}</span>${redo}</div>`];
-        if (t.now) card.push(kv('现在在做', escapeHtml(t.now)));
+        if (t.now) card.push(kv(t.kind === 'world' ? '外面在传' : '现在在做', escapeHtml(t.now)));
+        if (t.kind === 'world' && Number.isFinite(fate.worldNextFloor)) {
+            const left = fate.worldNextFloor - (state.view?.rows?.length ?? 0);
+            card.push(kv('下一件', escapeHtml(left > 0 ? `还有 ${left} 层,从下面随机挑一件爆出来` : '到点了,等前一件浮出的事写完就轮到')));
+        }
         if (!t.ideas?.length && t.kind !== 'common') {
             card.push(`<div class="ihf-muted">${t.ideasAsked ? '问过了,材料里看不出这一栏惦记什么' : '还没定念头,开局会自动定'}</div>`);
         }
         t.ideas?.forEach((it, i) => {
             const tag = it.state !== '进行中' ? `<span class="ihf-chip">${escapeHtml(it.state)}</span>` : '';
-            const idea = [`<div class="ihf-idea-title">心事 ${i + 1}:${escapeHtml(it.text)}${tag}</div>`];
-            idea.push(kv(t.kind === 'world' ? '什么时候爆' : '什么时候会做', escapeHtml(it.actWhen || '没写,这条只在背后影响,不会浮到正文')));
+            const isWorld = t.kind === 'world';
+            const idea = [`<div class="ihf-idea-title">${isWorld ? '大事' : '心事'} ${i + 1}:${escapeHtml(it.text)}${tag}</div>`];
+            if (isWorld) {
+                const when = Number.isFinite(it.surfacedAt) ? `已经爆出来了(第 ${it.surfacedAt} 层)`
+                    : fate.pending?.kind === 'world' && fate.pending.ideaIdx === i ? '轮到它了,这一两层会写进正文'
+                        : '在酝酿,轮到时随机挑中才爆';
+                idea.push(kv('状态', escapeHtml(when)));
+                if (it.actWhen) idea.push(kv('怎么捅出来', escapeHtml(it.actWhen)));
+            } else {
+                idea.push(kv('什么时候会做', escapeHtml(it.actWhen || '没写,这条只在背后影响,不会浮到正文')));
+            }
             if (it.acts?.length) idea.push(kv('碰上主角时', `<ul class="ihf-list">${it.acts.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`));
             const steps = limitSteps(it, tiers);
             if (steps.length) {
@@ -1522,6 +1588,9 @@ function fillSettings() {
     $('#ihf-fate-every').val(cfg.fate.everyFloors);
     $('#ihf-fate-gap').val(cfg.fate.surfaceGap);
     $('#ihf-fate-npc').val(cfg.fate.maxNpc);
+    $('#ihf-fate-world-n').val(cfg.fate.worldCount ?? 3);
+    $('#ihf-fate-due-min').val(cfg.fate.worldDueMin ?? 15);
+    $('#ihf-fate-due-max').val(cfg.fate.worldDueMax ?? 40);
     $('#ihf-never').val((cfg.people.itemNever ?? []).join('、'));
     $('#ihf-common').val((cfg.people.itemCommon ?? []).join('、'));
 }
@@ -1661,6 +1730,8 @@ const PAGE_HTML = {
           <label><span class="ihf-lab">推演间隔</span>每隔 <input type="number" id="ihf-fate-every" min="1" max="99"> 层一次</label>
           <label><span class="ihf-lab">浮出间隔</span>至少隔 <input type="number" id="ihf-fate-gap" min="1" max="99"> 层</label>
           <label><span class="ihf-lab">开栏上限</span>最多 <input type="number" id="ihf-fate-npc" min="1" max="8"> 个人</label>
+          <label><span class="ihf-lab">世界大事</span>同时酝酿 <input type="number" id="ihf-fate-world-n" min="1" max="8"> 件,每隔 <input type="number" id="ihf-fate-due-min" min="3" max="200"> 到 <input type="number" id="ihf-fate-due-max" min="3" max="300"> 层必然爆出来一件</label>
+          <div class="ihf-muted">一次只爆一件,从正在酝酿的里随机挑;爆掉一件就补一件新的。间隔要比下面的「浮出间隔」长,不然会被它卡住。</div>
           <button id="ihf-fate-save" class="ihf-btn ihf-primary">保存</button>
           <div class="ihf-muted">念头原文只存在这儿,永远不发给模型。发出去的只有「在场时会」和当前那一档的「界」。</div>
         </div>
@@ -1782,7 +1853,7 @@ function mountPanel() {
     $(document).on('click', '#ihf-fate-view .ihf-fate-redo', function () {
         const th = state.memory?.fate?.threads?.[String($(this).data('name'))];
         if (!th) return;
-        th.ideas = [];
+        th.ideas = (th.ideas ?? []).filter(it => Number.isFinite(it.surfacedAt));
         th.ideasAsked = false;
         if (state.memory.fate.pending?.name === th.name) state.memory.fate.pending = null;
         scheduleSave();

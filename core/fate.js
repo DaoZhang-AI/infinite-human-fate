@@ -39,6 +39,13 @@ export const DEFAULT_FATE = {
     influenceFloors: 30,
     /** 浮出后连挂这么多层模型还没写进正文,就撤回水下重新攒 */
     surfaceTries: 3,
+    /** 世界大事:同时酝酿几件,每隔 worldDueMin~worldDueMax 层必然爆出来一件(一次只爆一件,随机挑)。
+     *  道长 9/18:"这个爆点不会推动剧情的,除非你设置一个 X 回合后必然爆料,把这段剧情发给 ai,
+     *  不然它就只是一个好看的挂在插件里的东西。" 又说"大事件可以同时有多个,让用户自己填数字,
+     *  但是每次触发的只有一个"。世界大事的触发情形都在幕后,正文里永远等不到,所以节奏由插件数层数定。 */
+    worldCount: 3,
+    worldDueMin: 15,
+    worldDueMax: 40,
     /** 要不要单开一栏「世界」记背景板大事(某产品爆火、AI 横空出世)。
      *  网友留言、实时推送那些不归插件管,那是小手机的活。 */
     world: true,
@@ -159,6 +166,27 @@ export function canSurfaceNow(fate, cfg, floor) {
     return floor - (fate.lastSurfaceFloor ?? -9999) >= (cfg.surfaceGap ?? 12);
 }
 
+/** 下一件世界大事在第几层爆:从 floor 往后 [worldDueMin, worldDueMax] 里随机一个 */
+export function nextWorldFloor(floor, cfg = {}, rand = Math.random) {
+    const lo = Math.max(1, Number(cfg.worldDueMin) || 15);
+    const hi = Math.max(lo, Number(cfg.worldDueMax) || 40);
+    return floor + lo + Math.floor(rand() * (hi - lo + 1));
+}
+
+/**
+ * 该不该爆一件世界大事了。到点、没别的事挂着、离上次浮出够远,就从正在酝酿的里随机挑一件。
+ * 返回要爆的那件在 ideas 里的下标,不该爆返回 -1。
+ * 注意这里不推进下一次的时间:要等这件真写进正文(settlePending 结案)才排下一件,
+ * 模型那层没写出来,过浮出间隔会再挂一次,所以是"必然"爆出来。
+ */
+export function pickWorldIdea(fate, thread, floor, cfg = {}, rand = Math.random) {
+    if (thread?.kind !== 'world' || !Number.isFinite(fate.worldNextFloor) || floor < fate.worldNextFloor) return -1;
+    if (!canSurfaceNow(fate, cfg, floor)) return -1;
+    const live = (thread.ideas ?? []).map((it, i) => (it.state === '进行中' && it.text ? i : -1)).filter(i => i >= 0);
+    if (!live.length) return -1;
+    return live[Math.floor(rand() * live.length)];
+}
+
 /** 往某人栏里追加几行日常,超了从最老的丢 */
 export function pushLog(thread, day, lines, max = 30) {
     for (const text of lines) {
@@ -225,6 +253,17 @@ export function buildActsPrompt(fate, presentNames, cfg, ctx = {}) {
  */
 export function buildSurfacePrompt(pending) {
     if (!pending?.what) return '';
+    if (pending.kind === 'world') {
+        const w = ['[这一层必须发生:外面的一件事爆出来了]', pending.what];
+        if (pending.how) w.push(`怎么捅出来的:${pending.how}`);
+        w.push('',
+            '这件事到这一层才传开,不是回顾。由你在这一层把它写出来:',
+            '- 照这个世界观选一条路让它传到主角这边:新闻、推送、广播、公告、邸报、有人在饭桌上或路上提起,都行,别写错时代。',
+            '- 再写它对眼前的人和事有什么影响:谁听到了什么反应、原本的安排要不要变。',
+            '- 不许一笔带过,至少要有一个在场的人对它有反应。',
+            '写完之后,在记账块里写一行:幕后✓: 世界 已发生');
+        return w.join('\n');
+    }
     const out = ['[这一层必须发生]', pending.what, '', '这件事还没有发生,由你在这一层把它写出来,不是回顾。'];
     if (pending.why) out.push(`他为什么挑这时候:${pending.why}`);
     if (pending.also) out.push(`他同时还惦记着:${pending.also}`);
@@ -251,6 +290,9 @@ export function otherWants(thread, exceptIdx) {
 export function makePending(thread, ideaIdx, floor) {
     const idea = thread.ideas[ideaIdx];
     if (!idea) return null;
+    if (thread.kind === 'world') {
+        return { name: thread.name, kind: 'world', ideaIdx, what: idea.text, how: idea.actWhen, sinceFloor: floor, tries: 0 };
+    }
     return {
         name: thread.name,
         ideaIdx,

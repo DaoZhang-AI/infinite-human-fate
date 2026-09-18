@@ -315,7 +315,7 @@ const FATE_WORLD_SYSTEM = `你是资料员。读下面的设定和已经发生�
 行业里的风向、城里的新闻、某个产品或某个人要出事、行情要变,这一类背景板上的事。
 
 规则:
-1. 最多 3 条,有几条写几条,看不出来就回"无"。
+1. 写 {{COUNT}} 条。材料再少,也照这个世界观和地点推出合情合理的背景大事。
 2. **不写任何一个人的心事**,尤其不写主角和用户之间的事。这里只写外面的世界。
 3. 每条配一行「触发情形」:什么时候会爆出来,写一件具体的、看得见的事。
 4. 只用材料里出现过的地名、机构名,可以不提具体人。按世界观来,古代就是邸报茶馆,现代就是新闻热搜,别写错时代。
@@ -324,15 +324,17 @@ const FATE_WORLD_SYSTEM = `你是资料员。读下面的设定和已经发生�
 ① 正在酝酿的事
 触发情形: …`;
 
-/** 「世界」那一栏立念头:写大势,不写人,不要梯子(9/18 用写人的提示词,世界栏写成了主角的心事) */
-export function buildFateWorldMessages({ card, story, owners = [] }) {
+/** 「世界」那一栏立念头:写大势,不写人,不要梯子(9/18 用写人的提示词,世界栏写成了主角的心事)。
+ *  count = 这次要补几件;existing = 已经在酝酿、还没爆的,别写重复 */
+export function buildFateWorldMessages({ card, story, owners = [], count = 3, existing = [] }) {
     const body = [
         owners.length ? `【注意】主角是${owners.join('、')},这里不写他们的心事。` : '',
+        existing.length ? `【已经在酝酿的,别重复】\n${existing.map(s => '- ' + s).join('\n')}` : '',
         card ? `【设定】\n${clip(card, 4000)}` : '',
         story ? `【已经发生的剧情】\n${clip(story, 3000)}` : '',
     ].filter(Boolean).join('\n\n');
     return [
-        { role: 'system', content: FATE_WORLD_SYSTEM },
+        { role: 'system', content: FATE_WORLD_SYSTEM.replace('{{COUNT}}', String(Math.max(1, count))) },
         { role: 'user', content: body },
     ];
 }
