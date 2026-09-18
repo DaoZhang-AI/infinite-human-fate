@@ -166,6 +166,38 @@ const CSS = `
 .ihf-form select { flex: 1 1 9em; min-width: 8em; }
 .ihf-form input[type="number"] { width: 4.5em; }
 .ihf-form textarea { width: 100%; resize: vertical; }
+/* 全景表 */
+.ihf-scroll { max-height: 40vh; overflow: auto; border: 1px solid var(--ihf-border); border-radius: 8px; }
+.ihf-table { width: 100%; border-collapse: collapse; font-size: .86em; line-height: 1.5; }
+.ihf-table th, .ihf-table td { padding: 4px 6px; border-bottom: 1px solid var(--ihf-border); vertical-align: top; text-align: left; }
+.ihf-table th { position: sticky; top: 0; background: var(--ihf-bg2); color: var(--ihf-text2); font-weight: normal; }
+.ihf-table td:nth-child(4) { min-width: 14em; }
+.ihf-table tr.ihf-dim { opacity: .45; }
+/* 横条:好感、性格弧、事件影响力 */
+.ihf-bar { position: relative; height: 8px; background: var(--ihf-bg3); border-radius: 4px; overflow: hidden; margin: 4px 0; }
+.ihf-barfill { height: 100%; background: var(--ihf-accent); border-radius: 4px; transition: width .3s; }
+.ihf-barfill.ihf-barwait { background: repeating-linear-gradient(45deg, var(--ihf-accent) 0 6px, transparent 6px 12px); }
+.ihf-barmid { position: absolute; left: 50%; top: 0; width: 1px; height: 100%; background: var(--ihf-text2); opacity: .5; }
+.ihf-affbar { height: 12px; }
+.ihf-arcbar { margin-left: 1.2em; }
+.ihf-barrow { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; margin: 4px 0; }
+.ihf-barrow .ihf-barlab { grid-column: 1 / -1; font-size: .9em; }
+.ihf-barrow .ihf-barval { font-size: .85em; color: var(--ihf-text2); min-width: 4em; text-align: right; }
+.ihf-hist { display: flex; align-items: flex-end; gap: 4px; height: 60px; padding: 4px 0; }
+.ihf-histcol { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.ihf-histbar { width: 100%; background: var(--ihf-accent); border-radius: 3px 3px 0 0; min-height: 2px; }
+.ihf-histlab { font-size: .7em; color: var(--ihf-text2); margin-top: 2px; }
+/* 人物卡左右切换 */
+.ihf-carousel { display: flex; align-items: stretch; gap: 6px; }
+.ihf-carousel .ihf-icon-btn { align-self: center; flex: 0 0 auto; }
+.ihf-person { flex: 1; background: var(--ihf-bg2); border: 1px solid var(--ihf-border); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.ihf-person-head { font-size: 1.05em; margin-bottom: 4px; }
+.ihf-aff { display: flex; align-items: baseline; gap: 8px; }
+.ihf-affnum { font-size: 1.8em; font-weight: bold; color: var(--ihf-accent); }
+.ihf-afftier { font-size: 1em; }
+.ihf-dots { display: flex; justify-content: center; gap: 6px; margin: 4px 0 8px; }
+.ihf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ihf-bg3); border: 1px solid var(--ihf-border); cursor: pointer; }
+.ihf-dot.ihf-on { background: var(--ihf-accent); }
 .ihf-sep { border: none; border-top: 1px solid var(--ihf-border); margin: 12px 0; }
 `;
 

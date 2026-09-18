@@ -24,11 +24,12 @@ import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './cor
 import { mountShell } from './ui.js';
 import { COMMON, WORLD, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
+import { hideInstruction, captureProfile, buildLockExtractMessages, parseLockExtract, buildLockPrompt } from './core/locks.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.8.0';
+const VERSION = '0.9.1';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -39,6 +40,8 @@ const KEY_MEMORY = 'ihf_memory';
 const KEY_ANCHOR = 'ihf_anchor';
 /** 聊天还短、没有记忆块的时候,人物现状单独发 */
 const KEY_STATUS = 'ihf_status';
+/** 随机角色锁定:已固定的角色档案 */
+const KEY_LOCKS = 'ihf_locks';
 /** extension_prompt_types.IN_CHAT / extension_prompt_roles.SYSTEM(public/script.js:483-497) */
 const IN_CHAT = 1;
 const ROLE_SYSTEM = 0;
@@ -97,6 +100,11 @@ async function openChat() {
     state.memId = null;
     state.view = null;
     state.lastRun = null;
+    // 总开关关着:不读不建记忆文件、不往上下文挂任何东西(道长 9/17:关掉之后任何功能都不再介入酒馆)
+    if (state.config?.enabled === false) {
+        clearPrompts();
+        return render();
+    }
     if (!chatId) return render();
 
     const job = (async () => {
@@ -149,13 +157,21 @@ async function openChat() {
     }
 }
 
+/** 把插件挂过的注入全撤掉。总开关一关就调,不等下一轮生成 */
+function clearPrompts() {
+    const c = ctx();
+    for (const key of [KEY_LEDGER, KEY_MEMORY, KEY_ANCHOR, KEY_STATUS, KEY_LOCKS]) c.setExtensionPrompt(key, '', IN_CHAT, 0);
+}
+
 /** 对账。有新记录就排队存盘,并把缺的向量补上 */
 function refresh(forceSave = false) {
     const c = ctx();
+    if (state.config?.enabled === false) return;
     if (!state.memory || c.getCurrentChatId() !== state.chatId) return;
     state.view = reconcile(state.memory, c.chat, state.config.people);
     if (state.view.added || (forceSave && !state.memory.updated)) scheduleSave();
     settleFate();
+    scanLockTags();
     render();
     ensureVectors();
 }
@@ -248,7 +264,10 @@ function listConnections() {
     const list = [];
     try {
         for (const p of c.ConnectionManagerRequestService.getSupportedProfiles()) {
-            list.push({ id: `st:${p.id}`, name: p.name, group: '酒馆的连接配置', model: p.model || '', blocked: '' });
+            list.push({
+                id: `st:${p.id}`, name: p.name, group: '酒馆的连接配置', model: p.model || '', blocked: '',
+                url: p['api-url'] || '', secretId: p['secret-id'] || '', source: p.source || '', api: p.api || '',
+            });
         }
     } catch { /* 连接配置扩展被关了 */ }
     const acm = c.extensionSettings?.['api-config-manager'];
@@ -287,16 +306,18 @@ async function callModel(messages, backend) {
     if (!conn) throw new Error('选的副 API 找不到了(可能在别处被删了),去面板重新选一个');
     const maxTokens = Math.max(500, Number(state.config.jobs.maxTokens) || 8000);
     if (conn.blocked) throw new Error(conn.blocked);
+    // 面板上给这条连接单独选过模型就用选的,没选就用连接自己带的
+    const model = String(state.config.jobs.subModels?.[backend] ?? '').trim() || conn.model;
     let res;
     if (backend.startsWith('st:')) {
         // 预设和指令格式都不带:记账、压时间线不该扛整套预设(状态栏、思维链那些),白烧 token
-        res = await c.ConnectionManagerRequestService.sendRequest(backend.slice(3), messages, maxTokens, { stream: false, extractData: true, includePreset: false, includeInstruct: false });
+        res = await c.ConnectionManagerRequestService.sendRequest(backend.slice(3), messages, maxTokens, { stream: false, extractData: true, includePreset: false, includeInstruct: false }, model ? { model } : {});
     } else {
         res = await c.ChatCompletionService.processRequest({
             stream: false,
             messages,
             max_tokens: maxTokens,
-            model: conn.model,
+            model,
             chat_completion_source: 'custom',
             custom_url: conn.url,
             secret_id: conn.secretId,
@@ -657,6 +678,8 @@ function autoJobs() {
     if (nAuto && cfg.jobs.backfillBackend === 'sub' && state.view.pending.length) {
         return startBackfill(state.view.pending.slice(0, nAuto), 'sub');
     }
+    // 随机角色还没录到档案的,让副 API 看看最新这层有没有出场(每层只问一次)
+    if (lockPendingCount()) return startLockExtract('sub');
     if (cfg.jobs.timelineAuto && cfg.jobs.timelineBackend === 'sub' && pendingChunks().length) return startTimeline('sub');
     if (cfg.people?.enabled === false) return;
     // 卡里没写角色描述就估不了,别每轮都弹一次提示;老失败也别无限重试
@@ -868,6 +891,7 @@ globalThis.ihf_interceptor = async function (chat, _contextSize, _abort, type) {
         c.setExtensionPrompt(KEY_MEMORY, '', IN_CHAT, 0);
         c.setExtensionPrompt(KEY_ANCHOR, '', IN_CHAT, 0);
         c.setExtensionPrompt(KEY_STATUS, '', IN_CHAT, 0);
+        c.setExtensionPrompt(KEY_LOCKS, '', IN_CHAT, 0);
     };
     try {
         if (!state.config?.enabled || type === 'quiet') return clearAll();
@@ -900,6 +924,8 @@ globalThis.ihf_interceptor = async function (chat, _contextSize, _abort, type) {
         }
         // 已定型的性格和当前情绪挂紧挨用户最后那句之前:注意力一样高,但末条还是用户(道长)
         c.setExtensionPrompt(KEY_ANCHOR, plan?.anchor ?? '', IN_CHAT, depth, false, ROLE_SYSTEM);
+        // 已固定的随机角色档案(那条随机生成指令在 CHAT_COMPLETION_PROMPT_READY 里被藏掉,由这块顶上)
+        c.setExtensionPrompt(KEY_LOCKS, buildLockPrompt(lockArchives()), IN_CHAT, depth, false, ROLE_SYSTEM);
 
         const inline = state.config.ledger.mode === 'main-inline';
         const mods = { ...state.config.people?.modules, fate: state.config.fate?.enabled !== false };
@@ -1016,8 +1042,11 @@ function render() {
     if (state.error) lines.push(`<span class="ihf-error">${escapeHtml(state.error)}</span>`);
     el.innerHTML = lines.join('<br>');
     $('#ihf-stop').toggle(!!state.jobs.running);
+    renderTable();
     renderTimeline();
     renderPeople();
+    renderLocks();
+    renderFateChart();
     renderFate();
     // 球上转圈 = 后台在跑活;小黄点 = 有事要她看一眼
     ui?.setBusy(state.jobs.running || state.emb.running);
@@ -1127,32 +1156,42 @@ function renderPeople() {
     const offList = [['affinity', '好感度'], ['emotion', '情绪'], ['arc', '性格弧'], ['promise', '约定账'], ['item', '物品账']]
         .filter(([k]) => !modOn(k)).map(([, n]) => n);
     if (offList.length) out.push(`<div class="ihf-muted">已关掉:${offList.join('、')}(关着的这几块不记也不发,打开就又都算出来了)</div>`);
-    for (const p of Object.values(v.people)) {
-        const tier = affinityTierOf(pcfg.affinityTiers, p.affinity);
-        out.push(`<div><b>${escapeHtml(p.name)}</b>`
-            + (modOn('affinity')
-                ? ` <span class="ihf-muted">好感 ${p.affinity}(${escapeHtml(tier?.name ?? '')})</span>`
-                  + ` 开局 <input type="number" class="ihf-start" data-name="${escapeHtml(p.name)}" value="${p.start}" min="-100" max="100" style="width:4.5em">`
-                  + (p.startWhy ? ` <span class="ihf-muted">${p.startSource === 'manual' ? '(你改的)' : ''}${escapeHtml(p.startWhy)}</span>` : '')
-                : '')
-            + '</div>');
-        if (p.emotion) {
-            out.push(`<div>　情绪:${escapeHtml(p.emotion.kind)},还剩 ${p.emotion.left} 层 <span class="ihf-muted">起因:${escapeHtml(p.emotion.cause)}</span></div>`);
-        }
-        for (const a of p.arcs) {
-            const head = `弧${a.seq} ${escapeHtml(a.from ?? '(缺原句)')} → ${escapeHtml(a.to ?? '?')}`;
-            const tail = a.state === '封存'
-                ? `已封存,因为${escapeHtml(a.brokenBy)}`
-                : a.state === '锚定'
-                    ? `已定型${a.breakIf.length ? '' : ' <span class="ihf-error">(还没问破锚条件)</span>'}`
-                    : `${a.value}/${pcfg.anchorAt} ${arcStageOf(a.value, pcfg.anchorAt)}`;
-            out.push(`<div>　${head} · ${tail}</div>`);
-            for (const c of a.breakIf) out.push(`<div class="ihf-muted">　　破锚条件:${escapeHtml(c)}</div>`);
-            for (const l of a.log.slice(-4)) out.push(`<div class="ihf-muted">　　Day${l.day} ${l.d > 0 ? '+' : ''}${l.d} ${escapeHtml(l.why)}</div>`);
-        }
-        for (const l of modOn('affinity') ? p.affinityLog.slice(-4) : []) {
-            out.push(`<div class="ihf-muted">　好感 Day${l.day} ${l.d > 0 ? '+' : ''}${l.d}${l.raw !== l.d ? `(模型写了 ${l.raw},卡在上限)` : ''} ${escapeHtml(l.why)}</div>`);
-        }
+    // 一人一张卡,左右切换(道长:可以左右滑动切换看各个 NPC)
+    const people = Object.values(v.people);
+    state.peopleIdx = ((state.peopleIdx ?? 0) % people.length + people.length) % people.length;
+    const p = people[state.peopleIdx];
+    const tier = affinityTierOf(pcfg.affinityTiers, p.affinity);
+    const pct = Math.round((Math.max(-100, Math.min(100, p.affinity)) + 100) / 2);
+    out.push(`<div class="ihf-carousel">
+        <button class="ihf-icon-btn ihf-prev" title="上一个">◀</button>
+        <div class="ihf-person">
+          <div class="ihf-person-head"><b>${escapeHtml(p.name)}</b> <span class="ihf-muted">${state.peopleIdx + 1} / ${people.length}</span></div>
+          ${modOn('affinity') ? `
+          <div class="ihf-aff"><span class="ihf-affnum">${p.affinity}</span><span class="ihf-afftier">${escapeHtml(tier?.name ?? '')}</span></div>
+          <div class="ihf-bar ihf-affbar" title="-100 到 100"><div class="ihf-barfill" style="width:${pct}%"></div><div class="ihf-barmid"></div></div>
+          <div class="ihf-muted">${escapeHtml(tier?.text ?? '')}</div>
+          <div class="ihf-muted">开局 <input type="number" class="ihf-start" data-name="${escapeHtml(p.name)}" value="${p.start}" min="-100" max="100" style="width:4.5em">${p.startWhy ? ` ${p.startSource === 'manual' ? '(你改的)' : ''}${escapeHtml(p.startWhy)}` : ''}</div>` : ''}
+          ${p.emotion ? `<div>情绪:<b>${escapeHtml(p.emotion.kind)}</b>,还剩 ${p.emotion.left} 层 <span class="ihf-muted">起因:${escapeHtml(p.emotion.cause)}</span></div>` : (modOn('emotion') ? '<div class="ihf-muted">情绪:平静</div>' : '')}
+        </div>
+        <button class="ihf-icon-btn ihf-next" title="下一个">▶</button>
+      </div>`);
+    out.push(`<div class="ihf-dots">${people.map((x, i) => `<span class="ihf-dot${i === state.peopleIdx ? ' ihf-on' : ''}" data-idx="${i}" title="${escapeHtml(x.name)}"></span>`).join('')}</div>`);
+    for (const a of p.arcs) {
+        const head = `弧${a.seq} ${escapeHtml(a.from ?? '(缺原句)')} → ${escapeHtml(a.to ?? '?')}`;
+        const tail = a.state === '封存'
+            ? `已封存,因为${escapeHtml(a.brokenBy)}`
+            : a.state === '锚定'
+                ? `已定型${a.breakIf.length ? '' : ' <span class="ihf-error">(还没问什么事会改性格)</span>'}`
+                : `${a.value}/${pcfg.anchorAt} ${arcStageOf(a.value, pcfg.anchorAt)}`;
+        out.push(`<div>　${head} · ${tail}</div>`);
+        if (a.state !== '封存' && a.state !== '锚定') out.push(`<div class="ihf-bar ihf-arcbar"><div class="ihf-barfill" style="width:${Math.round(Math.max(0, Math.min(1, a.value / pcfg.anchorAt)) * 100)}%"></div></div>`);
+        for (const c of a.breakIf) out.push(`<div class="ihf-muted">　　会让它再变的事:${escapeHtml(c)}</div>`);
+        for (const l of a.log.slice(-4)) out.push(`<div class="ihf-muted">　　Day${l.day} ${l.d > 0 ? '+' : ''}${l.d} ${escapeHtml(l.why)}</div>`);
+    }
+    const affLog = modOn('affinity') ? p.affinityLog.slice(-6) : [];
+    if (affLog.length) out.push('<div><b>好感怎么变的</b></div>');
+    for (const l of affLog) {
+        out.push(`<div class="ihf-muted">　Day${l.day} ${l.d > 0 ? '+' : ''}${l.d}${l.raw !== l.d ? `(模型写了 ${l.raw},卡在上限)` : ''} ${escapeHtml(l.why)}</div>`);
     }
     const open = modOn('promise') ? v.promises.filter(x => x.state === 'open') : [];
     if (open.length) {
@@ -1241,6 +1280,261 @@ async function onFetchModels(k) {
     }
 }
 
+/** 副 API 那一行的模型框:按当前选的连接填 */
+function fillSubModel(connId) {
+    const cfg = state.config;
+    const id = String(connId || '');
+    const cur = id ? String(cfg?.jobs.subModels?.[id] ?? '') : '';
+    $('#ihf-sub-model').val(cur).prop('disabled', !id);
+    fillModelList('sub', id ? (cfg?.jobs.subModelLists?.[id] ?? []) : [], cur);
+    if (!id) $('#ihf-sub-count').text('先在上面选一条副 API');
+}
+
+/** 副 API 的「拉取模型」:走酒馆自己的 /status 接口,key 用酒馆密钥库里的,插件不碰 */
+async function onFetchSubModels() {
+    const id = String($('#ihf-sub').val() || '');
+    const conn = listConnections().find(x => x.id === id);
+    if (!conn) return toastr.warning('先选一条副 API', TITLE);
+    if (conn.blocked) return toastr.warning(conn.blocked, TITLE);
+    if (conn.api && conn.api !== 'openai') return toastr.info('这条不是聊天补全类的连接,拉不了模型列表,手填就行', TITLE);
+    const $btn = $('#ihf-sub-fetch').prop('disabled', true).text('拉取中…');
+    try {
+        const res = await fetch('/api/backends/chat-completions/status', {
+            method: 'POST',
+            headers: ctx().getRequestHeaders(),
+            cache: 'no-cache',
+            body: JSON.stringify({ chat_completion_source: conn.source || 'custom', custom_url: conn.url, secret_id: conn.secretId }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data?.error) throw new Error(typeof data.error === 'string' ? data.error : '对面返回了一个错误');
+        const models = [...new Set((Array.isArray(data?.data) ? data.data : []).map(m => String(m?.id ?? m ?? '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+        if (!models.length) return toastr.info('对面没返回任何模型。有的站不给列表,自己手填模型名就行', TITLE);
+        fillModelList('sub', models, String($('#ihf-sub-model').val() ?? ''));
+        await saveConfigPatch({ jobs: { subModelLists: { [id]: models } } }, ctx().getRequestHeaders());
+        state.config.jobs.subModelLists = { ...(state.config.jobs.subModelLists ?? {}), [id]: models };
+        toastr.success(`拉到 ${models.length} 个模型,列表已存。选一个再点保存`, TITLE);
+    } catch (e) {
+        toastr.error('拉不到模型列表:' + (e?.message ?? e) + '。有的站本来就不给列表,手填模型名即可', TITLE);
+    } finally {
+        $btn.prop('disabled', false).text('拉取模型');
+    }
+}
+
+/* ---------------- 记忆导出 / 导入 ---------------- */
+
+function exportMemory() {
+    if (!state.memory || !state.chatId) return toastr.info('先打开一场聊天', TITLE);
+    const payload = { format: 'ihf-export', version: 1, chatId: state.chatId, exportedAt: Date.now(), memory: state.memory };
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${String(state.chatId).replace(/[\\/:*?"<>|]+/g, '_')}.ihf-memory.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+/** 导入:和现有记忆按楼指纹合并(同一楼留较新的),不是覆盖。指纹对不上的楼进来也没用,不会被发 */
+async function importMemory(file) {
+    if (!file) return;
+    if (!state.memory || !state.chatId) return toastr.info('先打开一场聊天再导入', TITLE);
+    try {
+        const data = JSON.parse(await file.text());
+        const mem = data?.format === 'ihf-export' ? data.memory : data;
+        if (!mem || typeof mem !== 'object' || !mem.floors || typeof mem.floors !== 'object') throw new Error('这不是无限人类命运导出的记忆文件');
+        const before = Object.keys(state.memory.floors).length;
+        state.memory = mergeMemory(normalizeTimeline(mem), state.memory);
+        if (!state.memory.calendar?.start && mem.calendar?.start) state.memory.calendar = mem.calendar;
+        const after = Object.keys(state.memory.floors).length;
+        scheduleSave();
+        refresh(true);
+        toastr.success(`已合并:楼层记录 ${before} → ${after}${data?.chatId && data.chatId !== state.chatId ? '(来自另一场聊天:' + data.chatId + ')' : ''}`, TITLE);
+    } catch (e) {
+        toastr.error('导入失败:' + (e?.message ?? e), TITLE);
+    }
+}
+
+/* ---------------- 随机角色锁定 ---------------- */
+
+/** 规则跟着卡走,按卡的头像文件名分;群聊按群 id */
+function lockKey() {
+    const c = ctx();
+    if (c.groupId) return `group:${c.groupId}`;
+    const av = c.characters?.[c.characterId]?.avatar;
+    return av ? `char:${av}` : '';
+}
+
+function lockRules() {
+    const k = lockKey();
+    const all = state.config?.locks?.rules ?? {};
+    return k && Array.isArray(all[k]) ? all[k] : [];
+}
+
+function lockArchives() {
+    return state.memory?.locks ?? {};
+}
+
+async function saveLockRules(rules) {
+    const k = lockKey();
+    if (!k) return toastr.warning('先打开一张卡', TITLE);
+    await saveConfigPatch({ locks: { rules: { [k]: rules } } }, ctx().getRequestHeaders());
+    state.config.locks = state.config.locks ?? { rules: {} };
+    state.config.locks.rules = { ...(state.config.locks.rules ?? {}), [k]: rules };
+}
+
+/** 不花钱的那条路:卡要求模型输出 <标签>…</标签> 的,直接从各层正文里抓,抓到第一次出场的那份 */
+function scanLockTags() {
+    if (!state.memory || state.config?.enabled === false) return;
+    const rules = lockRules().filter(r => r.tag && !lockArchives()[r.label]?.profile);
+    if (!rules.length) return;
+    const chat = ctx().chat ?? [];
+    for (const r of rules) {
+        // 点过「重新摇」的,只看那之后的楼
+        const after = Number(lockArchives()[r.label]?.after ?? -1);
+        for (let i = after + 1; i < chat.length; i++) {
+            const m = chat[i];
+            if (m.is_user || m.is_system) continue;
+            const profile = captureProfile(m.mes, r.tag);
+            if (profile) {
+                setLockArchive(r.label, profile, i, 'tag');
+                break;
+            }
+        }
+    }
+}
+
+function setLockArchive(label, profile, floor, source) {
+    state.memory.locks = state.memory.locks ?? {};
+    state.memory.locks[label] = { profile, floor, source, at: Date.now() };
+    scheduleSave();
+    console.info(LOG, `随机角色「${label}」已固定:${profile}`);
+    toastr.success(`「${label}」已固定:${profile}`, TITLE);
+}
+
+/** 花钱的那条路:没标签可抓的,让副 API 从最新那层正文里提取。每层只问一次 */
+async function startLockExtract(which = null) {
+    if (!state.memory || !state.view) return;
+    const backend = backendOf(which ?? 'sub');
+    if (!backend) return;
+    const lastAi = [...state.view.rows].reverse().find(r => !r.isUser && !r.hidden);
+    if (!lastAi) return;
+    const todo = lockRules().filter(r => !lockArchives()[r.label]?.profile && lastAi.index > Number(lockArchives()[r.label]?.after ?? -1) && (state.memory.lockChecked?.[r.label] !== lastAi.fp));
+    if (!todo.length) return;
+    const raw = ctx().chat;
+    await runJob('锁定随机角色', todo, async r => {
+        state.memory.lockChecked = state.memory.lockChecked ?? {};
+        state.memory.lockChecked[r.label] = lastAi.fp;
+        const out = await callModel(buildLockExtractMessages({ label: r.label, hint: r.hint ?? '', text: extractNarrative(raw[lastAi.index]?.mes) }), backend);
+        const profile = parseLockExtract(out);
+        if (profile) setLockArchive(r.label, profile, lastAi.index, 'extract');
+        scheduleSave();
+    });
+}
+
+function lockPendingCount() {
+    if (!state.view) return 0;
+    const lastAi = [...state.view.rows].reverse().find(r => !r.isUser && !r.hidden);
+    if (!lastAi) return 0;
+    return lockRules().filter(r => !lockArchives()[r.label]?.profile && lastAi.index > Number(lockArchives()[r.label]?.after ?? -1) && state.memory?.lockChecked?.[r.label] !== lastAi.fp).length;
+}
+
+function renderLocks() {
+    const el = document.getElementById('ihf-lock-view');
+    if (!el || ui?.current !== 'renlei') return;
+    const rules = lockRules();
+    if (!lockKey()) { el.innerHTML = '<span class="ihf-muted">先打开一张卡</span>'; return; }
+    if (!rules.length) { el.innerHTML = '<span class="ihf-muted">这张卡还没加锁定规则</span>'; return; }
+    const arch = lockArchives();
+    const hits = state.lockHits;
+    const out = rules.map((r, i) => {
+        const a = arch[r.label];
+        const status = a?.profile
+            ? `<div>已固定(第 ${a.floor} 层,${a.source === 'tag' ? '按标签抓的' : a.source === 'manual' ? '你手改的' : '副 API 提取的'}):</div>
+               <label style="flex-direction:column;align-items:stretch"><input type="text" class="ihf-lock-profile text_pole" data-idx="${i}" value="${escapeHtml(a.profile)}" title="可以直接改,改完回车"></label>
+               <div class="ihf-acts"><button class="ihf-btn ihf-lock-reroll" data-idx="${i}" title="清掉档案,让那条随机指令重新放行,下一次出场重新摇">重新摇</button><button class="ihf-btn ihf-lock-del" data-idx="${i}">删掉规则</button></div>`
+            : `<div class="ihf-muted">还没出场。${r.tag ? `等模型写出 &lt;${escapeHtml(r.tag)}&gt; 就自动录` : (state.config.jobs.subProfile ? '每层回复后让副 API 看一眼有没有出场' : '<span class="ihf-error">没标签也没选副 API,录不了;去设置里选一条副 API</span>')}</div>
+               <div class="ihf-acts"><button class="ihf-btn ihf-lock-del" data-idx="${i}">删掉规则</button></div>`;
+        return `<div class="ihf-person" style="margin-bottom:6px"><div><b>${escapeHtml(r.label)}</b> <span class="ihf-muted">指令里的一句:「${escapeHtml(r.match)}」${r.tag ? ' · 档案标签 ' + escapeHtml(r.tag) : ''}</span></div>${status}</div>`;
+    });
+    // 生成过一轮才有数;刚录完档案还没生成时不报"0 处",免得误报
+    if (Object.values(arch).some(a => a?.profile) && Number.isFinite(hits)) out.push(`<div class="ihf-muted">上一轮从上下文里藏掉了 ${hits} 处随机指令${hits ? '' : ' <span class="ihf-error">(0 处:填的那句在发出去的上下文里找不到,检查是不是照抄的)</span>'}</div>`);
+    el.innerHTML = out.join('');
+}
+
+async function addLockRule() {
+    const label = String($('#ihf-lock-label').val() ?? '').trim();
+    const match = String($('#ihf-lock-match').val() ?? '').trim();
+    const tag = String($('#ihf-lock-tag').val() ?? '').trim().replace(/^<|>$/g, '');
+    if (!label || !match) return toastr.warning('「叫什么」和「指令里的一句」都要填', TITLE);
+    if (match.length < 6) return toastr.warning('那一句太短了,容易误伤别的段落,照抄长一点', TITLE);
+    const rules = lockRules().filter(r => r.label !== label);
+    rules.push({ label, match, tag });
+    try {
+        await saveLockRules(rules);
+        $('#ihf-lock-label, #ihf-lock-match, #ihf-lock-tag').val('');
+        scanLockTags();
+        renderLocks();
+        toastr.success(`已加「${label}」的锁定规则`, TITLE);
+    } catch (e) {
+        toastr.error('没存上:' + (e?.message ?? e), TITLE);
+    }
+}
+
+/* ---------------- 三个给玩家看的面板 ---------------- */
+
+/** ♾️ 全景表:从开局到现在每一层记了什么 */
+function renderTable() {
+    const el = document.getElementById('ihf-table-view');
+    if (!el || ui?.current !== 'wuxian') return;
+    const rows = (state.view?.rows ?? []).filter(r => !r.isUser && r.record?.summary);
+    if (!rows.length) { el.innerHTML = '<span class="ihf-muted">还没有记账的楼。模型每回复一层就会多一行</span>'; return; }
+    const cells = rows.map(r => {
+        const rec = r.record;
+        const when = `Day${r.day}${r.date ? '<br><span class="ihf-muted">' + escapeHtml(formatDate(r.date)) + '</span>' : ''}`;
+        return `<tr${r.hidden ? ' class="ihf-dim"' : ''}><td>${r.index}</td><td>${when}</td><td>${escapeHtml(rec.place || '')}${rec.timeOfDay ? '<br><span class="ihf-muted">' + escapeHtml(rec.timeOfDay) + '</span>' : ''}</td><td>${escapeHtml(rec.summary)}</td><td>${escapeHtml((rec.names ?? []).join('、'))}</td></tr>`;
+    });
+    el.innerHTML = `<div class="ihf-scroll"><table class="ihf-table"><thead><tr><th>层</th><th>剧情日</th><th>地点</th><th>发生了什么</th><th>在场</th></tr></thead><tbody>${cells.join('')}</tbody></table></div><div class="ihf-muted">共 ${rows.length} 层有记录${rows.some(r => r.hidden) ? ';灰的是已被隐藏的楼' : ''}</div>`;
+}
+
+/** 🎲 事件影响力:浮出过的事离现在多远、还剩多少影响;下面一排是幕后这几天的活动量 */
+function renderFateChart() {
+    const el = document.getElementById('ihf-fate-chart');
+    if (!el || ui?.current !== 'mingyun') return;
+    const fate = state.memory?.fate;
+    const cfg = state.config?.fate;
+    if (!fate || cfg?.enabled === false) { el.innerHTML = '<span class="ihf-muted">命运模块关着</span>'; return; }
+    const now = state.view?.rows?.length ?? 0;
+    const span = Math.max(1, Number(cfg.influenceFloors) || 30);
+    const out = [];
+    if (fate.pending) {
+        out.push(`<div class="ihf-barrow"><div class="ihf-barlab">${escapeHtml(fate.pending.name)}:${escapeHtml(fate.pending.what)}</div><div class="ihf-bar"><div class="ihf-barfill ihf-barwait" style="width:100%"></div></div><div class="ihf-barval">等着浮出</div></div>`);
+    }
+    const events = [];
+    for (const t of Object.values(fate.threads ?? {})) {
+        for (const it of t.ideas ?? []) {
+            if (Number.isFinite(it.surfacedAt)) events.push({ name: t.name, text: it.text, at: it.surfacedAt, state: it.state });
+        }
+    }
+    events.sort((a, b) => b.at - a.at);
+    for (const ev of events) {
+        const left = Math.max(0, Math.min(1, 1 - (now - ev.at) / span));
+        const pct = Math.round(left * 100);
+        out.push(`<div class="ihf-barrow"><div class="ihf-barlab">${escapeHtml(ev.name)}:${escapeHtml(ev.text)} <span class="ihf-muted">第 ${ev.at} 层浮出</span></div><div class="ihf-bar"><div class="ihf-barfill" style="width:${pct}%"></div></div><div class="ihf-barval">${pct ? pct + '%' : '已过去'}</div></div>`);
+    }
+    if (!fate.pending && !events.length) out.push('<div class="ihf-muted">还没有浮出过的事。念头攒够了、时机到了才会浮到正文里</div>');
+    // 幕后活动量:各栏「这几天」按剧情日数行数
+    const perDay = new Map();
+    for (const t of Object.values(fate.threads ?? {})) for (const l of t.log ?? []) if (Number.isFinite(l.day)) perDay.set(l.day, (perDay.get(l.day) ?? 0) + 1);
+    if (perDay.size) {
+        const days = [...perDay.keys()].sort((a, b) => a - b).slice(-14);
+        const max = Math.max(...days.map(d => perDay.get(d)));
+        out.push('<div class="ihf-muted" style="margin-top:6px">幕后活动量(每个剧情日各栏写了几行)</div>');
+        out.push(`<div class="ihf-hist">${days.map(d => `<div class="ihf-histcol" title="Day${d}:${perDay.get(d)} 行"><div class="ihf-histbar" style="height:${Math.round(perDay.get(d) / max * 100)}%"></div><div class="ihf-histlab">D${d}</div></div>`).join('')}</div>`);
+    }
+    el.innerHTML = out.join('');
+}
+
 function fillSettings() {
     const cfg = state.config;
     if (!cfg) return;
@@ -1257,6 +1551,7 @@ function fillSettings() {
     }
     if (cur && !conns.some(x => x.id === cur)) $sub.append($('<option>').val(cur).text('(之前选的已经找不到了)'));
     $sub.val(cur);
+    fillSubModel(cur);
     $('#ihf-enabled').prop('checked', cfg.enabled !== false);
     $('#ihf-tier').val(cfg.tierLock || '');
     $('#ihf-recall-on').prop('checked', !!cfg.recall.enabled);
@@ -1303,6 +1598,7 @@ async function saveSettings() {
         ledger: { mode: String($('#ihf-ledger').val()) },
         jobs: {
             subProfile: String($('#ihf-sub').val() || ''),
+            ...($('#ihf-sub').val() ? { subModels: { [String($('#ihf-sub').val())]: String($('#ihf-sub-model').val() ?? '').trim() } } : {}),
             backfillBackend: String($('#ihf-bf-backend').val()),
             timelineBackend: String($('#ihf-tl-backend').val()),
             timelineAuto: $('#ihf-tl-auto').prop('checked'),
@@ -1330,11 +1626,15 @@ async function saveSettings() {
         return;
     }
     try {
+        const wasOn = state.config?.enabled !== false;
         await saveConfigPatch(patch, ctx().getRequestHeaders());
         state.config = await loadConfig();
         state.lastTier = null;
         updateTier(false);
         fillSettings();
+        // 开关变了当场生效:关 = 撤掉注入、放下记忆;开 = 重新读这场聊天
+        const isOn = state.config.enabled !== false;
+        if (wasOn !== isOn) await openChat();
         toastr.success('设置已保存(存在插件自己的文件里,不进 settings.json)', TITLE);
     } catch (e) {
         toastr.error('设置没存上:' + (e?.message ?? e), TITLE);
@@ -1348,20 +1648,24 @@ const PAGE_HTML = {
     wuxian: `
       <div id="ihf-status" class="ihf-rows"></div>
       <div class="ihf-acts">
-        <button id="ihf-reload" class="ihf-btn">重新对账</button>
-        <button id="ihf-backfill" class="ihf-btn">补记账</button>
-        <button id="ihf-timeline" class="ihf-btn">压时间线</button>
+        <button id="ihf-reload" class="ihf-btn" title="重新把聊天和记忆文件核对一遍">重新核对</button>
+        <button id="ihf-backfill" class="ihf-btn" title="没写摘要的旧楼层,让模型补一句摘要">给旧楼补摘要</button>
+        <button id="ihf-timeline" class="ihf-btn" title="把更早的楼层压成一行一事的时间线">压成时间线</button>
+        <button id="ihf-export" class="ihf-btn" title="把这场聊天的记忆文件下载下来">导出记忆</button>
+        <button id="ihf-import" class="ihf-btn" title="把以前导出的记忆文件合并进这场聊天">导入记忆</button>
+        <input type="file" id="ihf-import-file" accept=".json,application/json" hidden>
         <button id="ihf-stop" class="ihf-btn" style="display:none">停止</button>
       </div>
       <hr class="ihf-sep">
-      <div class="ihf-card"><h4>时间线</h4><div id="ihf-tl-view" class="ihf-rows"></div></div>`,
+      <div class="ihf-card"><h4>全景表(从开局到现在)</h4><div id="ihf-table-view"></div></div>
+      <div class="ihf-card"><h4>时间线(更早的楼压成的)</h4><div id="ihf-tl-view" class="ihf-rows"></div></div>`,
 
     renlei: `
       <div id="ihf-people-view" class="ihf-rows"></div>
       <div class="ihf-acts">
-        <button id="ihf-affinit" class="ihf-btn">估开局好感</button>
-        <button id="ihf-origins" class="ihf-btn">摘性格原句</button>
-        <button id="ihf-breakif" class="ihf-btn">问破锚条件</button>
+        <button id="ihf-affinit" class="ihf-btn" title="按人设和开场白,给每个人估一个开局好感">估一下开局好感</button>
+        <button id="ihf-origins" class="ihf-btn" title="从人设里摘出每个人的性格原句,性格弧从这儿起">从人设里摘性格</button>
+        <button id="ihf-breakif" class="ihf-btn" title="性格定型之后,问模型什么事会让它再变">问什么事会改性格</button>
       </div>
       <div class="ihf-muted">数都是按各层的加减现算的,不存死值。改了楼、滑了 swipe,重新对账就跟着变。</div>
       <hr class="ihf-sep">
@@ -1376,6 +1680,18 @@ const PAGE_HTML = {
           <label><input type="checkbox" id="ihf-mod-promise"> 约定账</label>
           <label><input type="checkbox" id="ihf-mod-item"> 物品账</label>
           <button id="ihf-save" class="ihf-btn ihf-primary">保存</button>
+        </div>
+      </div>
+      <div class="ihf-card">
+        <h4>随机角色锁定</h4>
+        <div class="ihf-muted">卡里让模型"第一次出场时随机起名、定样貌"的角色(女二、路人、地点都算),第一次出场后录成档案,之后把那条随机指令从发给模型的上下文里藏掉,换成档案顶上,就不会每回合重摇了。想换一个就点「重新摇」。</div>
+        <div id="ihf-lock-view" class="ihf-rows"></div>
+        <div class="ihf-form">
+          <label><span class="ihf-lab">叫什么</span><input type="text" id="ihf-lock-label" placeholder="女二" style="flex:1"></label>
+          <label><span class="ihf-lab">指令里的一句</span><input type="text" id="ihf-lock-match" placeholder="照抄那条随机指令里独一无二的一句,比如:她第一次在剧情里出场时" style="flex:1"></label>
+          <label><span class="ihf-lab">档案标签</span><input type="text" id="ihf-lock-tag" placeholder="卡要求模型输出的标签名,如 女二档案;没有就空着,由副 API 提取" style="flex:1"></label>
+          <button id="ihf-lock-add" class="ihf-btn ihf-primary">加一条</button>
+          <div class="ihf-muted">规则跟着这张卡走,档案跟着这一局走。换一局重新摇,规则还在。</div>
         </div>
       </div>
       <div class="ihf-card">
@@ -1396,10 +1712,11 @@ const PAGE_HTML = {
       </div>`,
 
     mingyun: `
+      <div class="ihf-card"><h4>事件影响力</h4><div id="ihf-fate-chart"></div></div>
       <div id="ihf-fate-view" class="ihf-rows"></div>
       <div class="ihf-acts">
-        <button id="ihf-fate-ideas" class="ihf-btn">立念头</button>
-        <button id="ihf-fate-survey" class="ihf-btn">跑一次推演</button>
+        <button id="ihf-fate-ideas" class="ihf-btn" title="给每个 NPC 定几条长期念头,沉在水下慢慢酝酿">给 NPC 定幕后念头</button>
+        <button id="ihf-fate-survey" class="ihf-btn" title="让 NPC 和世界在幕后过几天,更新各自的动向">推演一次幕后</button>
       </div>
       <hr class="ihf-sep">
       <div class="ihf-card">
@@ -1433,6 +1750,8 @@ const PAGE_HTML = {
         <div class="ihf-form">
           <label><span class="ihf-lab">用哪个</span><select id="ihf-sub"></select></label>
           <div class="ihf-muted">从 API 管理器或酒馆的连接配置里选。请求经酒馆服务器发出、用酒馆密钥库里的 key,插件不碰也不存 key。</div>
+          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-sub-model" list="ihf-sub-models" placeholder="空着 = 用这条连接自己带的模型" style="flex:1"><datalist id="ihf-sub-models"></datalist><button id="ihf-sub-fetch" class="ihf-btn">拉取模型</button></label>
+          <div id="ihf-sub-count" class="ihf-muted"></div>
           <label><span class="ihf-lab">补记账用</span><select id="ihf-bf-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
           <label><span class="ihf-lab">压时间线用</span><select id="ihf-tl-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
           <label><input type="checkbox" id="ihf-tl-auto"> 压时间线用副 API 时,自动压</label>
@@ -1519,6 +1838,41 @@ function mountPanel() {
     $('#ihf-timeline').on('click', () => startTimeline());
     $('#ihf-stop').on('click', () => { state.jobs.stop = true; render(); });
     $('#ihf-save, #ihf-save2, #ihf-save3').on('click', () => saveSettings());
+    $('#ihf-export').on('click', () => exportMemory());
+    $('#ihf-import').on('click', () => $('#ihf-import-file').val('').trigger('click'));
+    $('#ihf-import-file').on('change', function () { importMemory(this.files?.[0]); });
+    $('#ihf-sub').on('change', () => fillSubModel($('#ihf-sub').val()));
+    $('#ihf-sub-fetch').on('click', () => onFetchSubModels());
+    $('#ihf-lock-add').on('click', () => addLockRule());
+    $(document).on('click', '#ihf-lock-view .ihf-lock-del', async function () {
+        const rules = lockRules().filter((_, i) => i !== Number($(this).data('idx')));
+        await saveLockRules(rules);
+        renderLocks();
+    });
+    $(document).on('click', '#ihf-lock-view .ihf-lock-reroll', function () {
+        const r = lockRules()[Number($(this).data('idx'))];
+        if (!r || !state.memory) return;
+        // 不删键,留一条空档案记着"从第几层之后才算重新摇的":不然按标签扫旧楼又把原来那份抓回来,
+        // 两台设备合并时远端的旧档案也会灌回来
+        const lastAi = [...(state.view?.rows ?? [])].reverse().find(x => !x.isUser && !x.hidden);
+        state.memory.locks = { ...(state.memory.locks ?? {}), [r.label]: { profile: '', after: lastAi?.index ?? -1, source: 'reroll', at: Date.now() } };
+        if (lastAi) state.memory.lockChecked = { ...(state.memory.lockChecked ?? {}), [r.label]: lastAi.fp };
+        scheduleSave();
+        renderLocks();
+        toastr.info(`「${r.label}」的档案已清掉,那条随机指令下一轮重新放行`, TITLE);
+    });
+    $(document).on('change', '#ihf-lock-view .ihf-lock-profile', function () {
+        const r = lockRules()[Number($(this).data('idx'))];
+        const v = String($(this).val() ?? '').trim();
+        if (!r || !state.memory || !v) return;
+        const old = state.memory.locks?.[r.label] ?? { floor: 0 };
+        state.memory.locks = { ...(state.memory.locks ?? {}), [r.label]: { ...old, profile: v, source: 'manual', at: Date.now() } };
+        scheduleSave();
+        renderLocks();
+    });
+    $(document).on('click', '#ihf-people-view .ihf-prev', () => { state.peopleIdx = (state.peopleIdx ?? 0) - 1; renderPeople(); });
+    $(document).on('click', '#ihf-people-view .ihf-next', () => { state.peopleIdx = (state.peopleIdx ?? 0) + 1; renderPeople(); });
+    $(document).on('click', '#ihf-people-view .ihf-dot', function () { state.peopleIdx = Number($(this).data('idx')) || 0; renderPeople(); });
     $('#ihf-embed-fetch').on('click', () => onFetchModels('embed'));
     $('#ihf-rerank-fetch').on('click', () => onFetchModels('rerank'));
     $('#ihf-via').on('change', () => renderRelayState());
@@ -1594,6 +1948,24 @@ jQuery(async () => {
     eventSource.on(et.GENERATION_ENDED, () => {
         state.generating = false;
         setTimeout(() => { refresh(); autoJobs(); }, 300);
+    });
+    // 随机角色锁定:档案录好之后,把那条随机生成指令从真正发出去的上下文里藏掉。
+    // 这个事件给的 chat 就是预设组装完、世界书塞完的最终消息数组,改它的 content 就改了发出去的东西。
+    eventSource.on(et.CHAT_COMPLETION_PROMPT_READY, ({ chat, dryRun }) => {
+        if (dryRun || state.config?.enabled === false || !state.memory || !Array.isArray(chat)) return;
+        const arch = lockArchives();
+        const active = lockRules().filter(r => r.match && arch[r.label]?.profile);
+        if (!active.length) return;
+        let hits = 0;
+        for (const m of chat) {
+            if (typeof m?.content !== 'string') continue;
+            for (const r of active) {
+                const h = hideInstruction(m.content, r.match);
+                if (h.hit) { m.content = h.text; hits++; }
+            }
+        }
+        state.lockHits = hits;
+        if (hits) console.info(LOG, `随机指令已从上下文藏掉 ${hits} 处`);
     });
     // 查更新要等服务端 git fetch 一趟,别跟开屏抢路,歇一会儿再问
     setTimeout(checkUpdate, 8000);
