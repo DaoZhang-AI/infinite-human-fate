@@ -146,6 +146,7 @@ const CSS = `
 .ihf-rows { font-size: .86em; line-height: 1.75; }
 .ihf-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .ihf-btn {
+  white-space: nowrap; flex: 0 0 auto;
   padding: 5px 11px; border-radius: 7px; font-size: .82em;
   border: 1px solid var(--ihf-border); background: var(--ihf-bg2);
   color: var(--ihf-text); cursor: pointer; transition: background .15s;

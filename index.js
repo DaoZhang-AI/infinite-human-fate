@@ -29,7 +29,7 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
