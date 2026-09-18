@@ -177,7 +177,7 @@ const FATE_SURVEY_SYSTEM = `你是记录员。下面这个人这几天不在 {{u
 - …`;
 
 /** 幕后推演:一个人一个人地问(道长:分开写,不然模型会把所有事糊在一起) */
-export function buildFateSurveyMessages({ name, kind, card, ideas = [], recentLog = '', story = '', days = 1, isChar = false }) {
+export function buildFateSurveyMessages({ name, kind, card, ideas = [], recentLog = '', story = '', days = 1, isChar = false, romance = false }) {
     const wants = ideas
         .map((it, i) => `${i + 1}) ${it.text}`)
         .join('\n');
@@ -195,6 +195,9 @@ export function buildFateSurveyMessages({ name, kind, card, ideas = [], recentLo
         wants ? `【他长期惦记着的事(只影响他怎么过日子,不要直接写出来)】\n${wants}` : '',
         recentLog ? `【他前几天干了什么】\n${clip(recentLog, 800)}` : '',
         story ? `【char 和 {{user}} 这边最近发生了什么】\n${clip(story, 2000)}` : '',
+        kind === 'npc' || !kind
+            ? (romance ? '【幕后感情线】他在幕后可以跟别人约会、暧昧、吵架和好,写日常时照常写进去。' : '【幕后感情线】不写他在幕后跟别人谈恋爱、暧昧。')
+            : '',
         `【距上次记录过了大约 ${days} 天】`,
     ].filter(Boolean).join('\n\n');
     return [
@@ -290,24 +293,36 @@ export function excerptAbout(card, name, max = 3000) {
  * 模型会把主角的心事写到 NPC 头上(父亲那栏写的全是主角的事)。
  * 所以:①明说谁是主角、谁是用户,念头的主语只能是这个 NPC;②设定先挑提到他的段落,整篇只作背景。
  */
-export function buildFateIdeaMessages({ name, card, story, traits, tierNames = [], owners = [], userName = '' }) {
+export function buildFateIdeaMessages({ name, card, story, traits, tierNames = [], owners = [], userName = '', isChar = false, romance = false }) {
     // 道长 9/18:称呼用 {{user}}(一定指用户扮演的人)/ char(主要人物)/ NPC(次要人物)。说"主角"模型会分不清谁扮演谁。
     // 不用酒馆的 char:它换出来的是卡名,卡名可能是个团名(比如某某乐队)
     // 副 API 直接发、酒馆不替换 {{user}},所以开头给一张对照表;念头里写的 {{user}} 进主线时酒馆会换成真名
     const sys = FATE_IDEA_SYSTEM.replace('{{TIERS}}', tierNames.join('、') || '好感由低到高的各档');
     const about = excerptAbout(card, name);
     const map = `【本局的称呼】{{user}} 是${userName || '用户扮演的人'}` + (owners.length ? `;char(主要人物)是${owners.join('、')}(卡名是团名的话,卡里写的主要成员都算 char)` : '') + `;这一栏要写的 NPC 是${name}。`;
-    const ownerLine = owners.length
+    // 这一栏就是 char:写他不在场时惦记的事、会怎么回到剧情里(道长 9/18:char 在幕后也会介入,比 NPC 勤)
+    const charLine = isChar
+        ? `【注意】${name}是 char(主要人物)之一,现在不在场。写他不在 {{user}} 身边这段时间自己惦记的事,`
+            + `以及他会在什么场面、怎么回到剧情里。念头多半跟他和 {{user}} 的关系、他自己的主线有关,别写成旁人的事。`
+        : '';
+    const ownerLine = isChar ? charLine : owners.length
         ? `【注意】这一栏写的是${name},不是char。每条念头的主语都必须是${name}本人,写${name}自己惦记的事;char在念头里只能作为别人出现。`
             + `${name}的念头可以跟char有关(比如当爹的惦记儿子),但惦记的人是${name},写的是${name}的心思和${name}会做的事;`
             + `别把char自己的心事搬过来。`
             + `\n写完每条自己核对一遍:这件事里动手的、惦记的,是不是${name}本人?用的东西、去的地方,是不是${name}自己的?`
             + `只要这条换成char来做也说得通(比如用的是char的手机、办的是char的公事),就是写错了人,删掉重写。`
         : '';
+    // 幕后恋爱开关(道长 9/18):开着就允许一条跟 {{user}} 无关的感情线,关着明说不写
+    const romanceLine = romance
+        ? `【幕后感情线】可以有(最多一条)${name}跟 {{user}} 以外的人的感情线:暧昧、在谈、分分合合、被人追都行。`
+            + `对象优先用材料里出现过的人;没有合适的,就写他生活圈里的人,用身份称呼(比如"他的同事""老同学"),不起名字。`
+            + `这条的介入时机可以是 {{user}} 撞见、听说,或者这段感情影响到他跟 {{user}} 的事。`
+        : `【幕后感情线】不写${name}在幕后跟别人谈恋爱、暧昧。`;
     const body = [
         `【要写谁】${name}`,
         map,
         ownerLine,
+        romanceLine,
         traits ? `【${name}是什么性子(照这个定梯子的高度)】\n${clip(traits, 800)}` : '',
         about ? `【设定里提到${name}的地方】\n${about}` : `【设定里提到${name}的地方】(没有)`,
         card ? `【整张卡的设定(只当背景,别把里面char的心事写给${name})】\n${clip(card, 2500)}` : '',

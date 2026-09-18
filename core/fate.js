@@ -14,7 +14,8 @@
  *     她:"模型分不清暗戳戳勾引和当面 NTR 的区别。"问题不是它藏不住秘密,是它没有强度刻度,
  *     所以每条念头必须配一条具体的界,写不出界的就不发那条行为清单。
  *   - 浮出必须写成**命令**,还要明说这件事还没发生。她:"不然有可能会被 llm 当已经发生的事。"
- *   - 命运只管 NPC 和世界。char 自己的草蛇灰线是另一条,不在这块。
+ *   - 9/18 改:命运就是不在场的人在幕后各做各的事,char 和 NPC 都算,念头被触发才介入剧情;
+ *     char 比 NPC 介入得勤(最晚层数更短)。在场的人在「人类」页,不走这一套。
  *
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
@@ -47,6 +48,12 @@ export const DEFAULT_FATE = {
     /** NPC 念头:介入时机的场面一直不来,最晚在这个层数范围里(随机)自己造机会进场(道长 9/18) */
     npcDueMin: 20,
     npcDueMax: 50,
+    /** char(主要人物)不在场时比 NPC 更勤:场面不来,最晚这么多层就自己找上来(道长 9/18) */
+    charDueMin: 8,
+    charDueMax: 20,
+    /** char 和 NPC 会不会在幕后跟别人谈恋爱(念头里就有跟 {{user}} 无关的感情线)。
+     *  道长 9/18:"其实我喜欢玩这种的,但是也有人不喜欢,所以做成可开关的吧"。默认关,她自己打开 */
+    romance: false,
     worldDueMin: 15,
     worldDueMax: 40,
     /** 要不要单开一栏「世界」记背景板大事(某产品爆火、AI 横空出世)。
@@ -379,10 +386,10 @@ export function leakCheck(fate, text, min = 8, baseline = '', margin = 4) {
  */
 
 /** 给 NPC 还没排期的念头排「最晚第几层」:从 floor 往后 [npcDueMin, npcDueMax] 里随机 */
-export function scheduleIdeaDue(thread, floor, cfg = {}, rand = Math.random) {
+export function scheduleIdeaDue(thread, floor, cfg = {}, rand = Math.random, isChar = false) {
     if (thread?.kind !== 'npc') return 0;
-    const lo = Math.max(1, Number(cfg.npcDueMin) || 20);
-    const hi = Math.max(lo, Number(cfg.npcDueMax) || 50);
+    const lo = Math.max(1, Number(isChar ? cfg.charDueMin : cfg.npcDueMin) || (isChar ? 8 : 20));
+    const hi = Math.max(lo, Number(isChar ? cfg.charDueMax : cfg.npcDueMax) || (isChar ? 20 : 50));
     let n = 0;
     for (const it of thread.ideas ?? []) {
         if (it.state !== '进行中' || !it.fallback || Number.isFinite(it.dueFloor)) continue;
@@ -393,11 +400,12 @@ export function scheduleIdeaDue(thread, floor, cfg = {}, rand = Math.random) {
 }
 
 /** 到了最晚层数、该自己造机会进场的那一条(最早到期的),没有返回 null */
-export function pickDueIdea(fate, floor, cfg = {}) {
+export function pickDueIdea(fate, floor, cfg = {}, present = new Set()) {
     if (!canSurfaceNow(fate, cfg, floor)) return null;
     let best = null;
     for (const t of Object.values(fate.threads ?? {})) {
-        if (t.kind !== 'npc') continue;
+        // 在场的人本来就在正文里,到点也不硬塞,等他离场再说
+        if (t.kind !== 'npc' || present.has(t.name)) continue;
         (t.ideas ?? []).forEach((it, i) => {
             if (it.state !== '进行中' || !it.fallback || !Number.isFinite(it.dueFloor) || it.dueFloor > floor) return;
             if (!best || it.dueFloor < best.idea.dueFloor) best = { thread: t, idx: i, idea: it };
@@ -426,10 +434,11 @@ export function makeDuePending(thread, ideaIdx, floor) {
  * [如果这些场面出现了]:每层发给主线的条件句。场面来了才照写,别为了触发去安排它。
  * 念头原文不出门(道长 9/12 定的),只发场面和他会做的事。
  */
-export function buildTriggerPrompt(fate, cfg = {}) {
+export function buildTriggerPrompt(fate, cfg = {}, present = new Set()) {
     const lines = [];
     for (const t of Object.values(fate.threads ?? {})) {
-        if (t.kind !== 'npc') continue;
+        // 介入是给不在场的人用的:在场的人就在正文里,不用告诉模型"场面来了他会怎样"
+        if (t.kind !== 'npc' || present.has(t.name)) continue;
         (t.ideas ?? []).forEach((it, i) => {
             if (it.state !== '进行中' || !it.actWhen || !it.onTrigger) return;
             if (fate.pending?.name === t.name && fate.pending.ideaIdx === i) return;
