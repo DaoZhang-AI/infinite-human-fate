@@ -173,6 +173,14 @@ const CSS = `
 .ihf-table th, .ihf-table td { padding: 4px 6px; border-bottom: 1px solid var(--ihf-border); vertical-align: top; text-align: left; }
 .ihf-table th { position: sticky; top: 0; background: var(--ihf-bg2); color: var(--ihf-text2); font-weight: normal; }
 .ihf-table td:nth-child(4) { min-width: 14em; }
+/* 手动重跑那一格,默认收起 */
+.ihf-manual { margin: 8px 0; border: 1px dashed var(--ihf-border); border-radius: 8px; padding: 4px 8px; }
+.ihf-manual > summary { cursor: pointer; color: var(--ihf-text2); font-size: .85em; }
+.ihf-manual[open] > summary { margin-bottom: 4px; }
+/* 层号、时间、地点别被挤成一个字一行(道长 9/18 截图) */
+.ihf-table th, .ihf-table td:nth-child(1) { white-space: nowrap; }
+.ihf-table td.ihf-nowrap { white-space: nowrap; }
+.ihf-table td:nth-child(3) { min-width: 5em; }
 .ihf-table tr.ihf-dim { opacity: .45; }
 /* 横条:好感、性格弧、事件影响力 */
 .ihf-bar { position: relative; height: 8px; background: var(--ihf-bg3); border-radius: 4px; overflow: hidden; margin: 4px 0; }

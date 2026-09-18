@@ -28,7 +28,7 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.3';
+const VERSION = '0.9.4';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -67,7 +67,8 @@ const state = {
     /** 补记账、压时间线的进度 */
     jobs: { running: false, kind: '', done: 0, total: 0, failed: 0, stop: false, error: '' },
     /** 开局好感自动估过几次。模型老不按格式写就别一直重试,面板按钮照样能手动再来 */
-    affinityInitTried: 0,
+    /** 开局一次性的活每场各试了几次:{ affinity, origins, breakif, ideas } */
+    onceTried: {},
     /** 查到有新版 */
     hasUpdate: false,
 };
@@ -97,6 +98,8 @@ async function openChat() {
     state.memId = null;
     state.view = null;
     state.lastRun = null;
+    // 开局一次性的活按场计次,换一场重新给两次机会
+    state.onceTried = {};
     // 总开关关着:不读不建记忆文件、不往上下文挂任何东西(道长 9/17:关掉之后任何功能都不再介入酒馆)
     if (state.config?.enabled === false) {
         clearPrompts();
@@ -167,6 +170,7 @@ function refresh(forceSave = false) {
     if (!state.memory || c.getCurrentChatId() !== state.chatId) return;
     state.view = reconcile(state.memory, c.chat, state.config.people);
     if (state.view.added || (forceSave && !state.memory.updated)) scheduleSave();
+    if (state.config.fate?.enabled !== false && state.memory.fate) ensureThreads();
     settleFate();
     render();
     ensureVectors();
@@ -552,7 +556,19 @@ function fateRoster() {
     ]);
     names.delete(me);
     names.delete('');
+    // 命运只管 NPC 和世界,卡主自己不开栏(道长 9/12 定的;9/18 发现卡主被当成 NPC 立了念头)
+    for (const n of cardOwners()) names.delete(n);
     return [...names].slice(0, cfg.maxNpc ?? 4);
+}
+
+/** 这张卡的主角(群聊就是全体成员)。他们的草蛇灰线归卡自己,不归命运 */
+function cardOwners() {
+    const c = ctx();
+    const group = c.groups?.find(g => String(g.id) === String(c.groupId));
+    if (group) {
+        return (group.members ?? []).map(av => c.characters?.find(ch => ch.avatar === av)?.name).filter(Boolean);
+    }
+    return [c.name2 || c.characters?.[c.characterId]?.name].filter(Boolean);
 }
 
 /** 这一场的幕后各栏,按需补齐(NPC + 共同 + 世界) */
@@ -560,6 +576,14 @@ function ensureThreads() {
     const cfg = state.config.fate;
     const fate = state.memory.fate;
     let added = 0;
+    // 旧版把卡主也开了栏,删掉(连同它的念头和排队中的浮出)
+    for (const n of cardOwners()) {
+        if (fate.threads[n]?.kind === 'npc') {
+            delete fate.threads[n];
+            if (fate.pending?.name === n) fate.pending = null;
+            added++;
+        }
+    }
     for (const name of fateRoster()) {
         if (!fate.threads[name]) { fate.threads[name] = emptyThread(name, 'npc'); added++; }
     }
@@ -660,38 +684,51 @@ function settleFate() {
 function autoJobs() {
     const cfg = state.config;
     // 总开关关着就一个后台活都不跑(道长:关掉之后任何功能都不再介入酒馆)
-    if (!cfg || cfg.enabled === false || !state.view || state.jobs.running || state.generating || !cfg.jobs.subProfile) return;
-    if (cfg.ledger.mode === 'sub-after') {
-        const lastAi = [...state.view.rows].reverse().find(r => !r.isUser && !r.hidden);
-        if (lastAi && !lastAi.record) {
-            startBackfill([lastAi.index], 'sub');
-            return;
+    if (!cfg || cfg.enabled === false || !state.view || state.jobs.running || state.generating) return;
+    const sub = !!cfg.jobs.subProfile;
+
+    // 每层都要跑的活(记账、补旧账、压时间线、幕后推演)只走副 API,不占主线额度
+    if (sub) {
+        if (cfg.ledger.mode === 'sub-after') {
+            const lastAi = [...state.view.rows].reverse().find(r => !r.isUser && !r.hidden);
+            if (lastAi && !lastAi.record) {
+                startBackfill([lastAi.index], 'sub');
+                return;
+            }
+        }
+        // 几百层的老聊天一次补不完:每轮生成后从最早的往后补几层旧账,分批慢慢补完
+        // (道长:必须从第 0 层往现在补,倒着补时间线会乱)
+        const nAuto = Math.max(0, Math.floor(Number(cfg.jobs.backfillAuto) || 0));
+        if (nAuto && cfg.jobs.backfillBackend === 'sub' && state.view.pending.length) {
+            return startBackfill(state.view.pending.slice(0, nAuto), 'sub');
+        }
+        if (cfg.jobs.timelineAuto && cfg.jobs.timelineBackend === 'sub' && pendingChunks().length) return startTimeline('sub');
+    }
+
+    // 开局一次性的活:估开局好感、摘性格原句、问破锚条件、给 NPC 定念头。
+    // 道长 9/18:"这些不应该是开局的时候自动来的吗?" 所以没选副 API 也自动跑,用主 API;
+    // 每样每场最多试两次,失败了不无限重试烧额度
+    const once = sub ? 'sub' : 'main';
+    const tried = state.onceTried ?? (state.onceTried = {});
+    const tryOnce = (key, fn) => {
+        if ((tried[key] ?? 0) >= 2) return false;
+        tried[key] = (tried[key] ?? 0) + 1;
+        fn(once);
+        return true;
+    };
+    if (cfg.people?.enabled !== false) {
+        // 卡里没写角色描述就估不了,别每轮都弹一次提示
+        if (needsAffinityInit(state.memory, cfg.people) && cardDescription().trim() && tryOnce('affinity', startAffinityInit)) return;
+        if (cfg.people?.modules?.arc !== false) {
+            if (pendingOrigins(state.view.people, state.memory.origins).length && tryOnce('origins', startOrigins)) return;
+            if (pendingAnchors(state.view.people).length && tryOnce('breakif', startBreakIf)) return;
         }
     }
-    // 几百层的老聊天一次补不完:每轮生成后从最早的往后补几层旧账,分批慢慢补完
-    // (道长:必须从第 0 层往现在补,倒着补时间线会乱)
-    const nAuto = Math.max(0, Math.floor(Number(cfg.jobs.backfillAuto) || 0));
-    if (nAuto && cfg.jobs.backfillBackend === 'sub' && state.view.pending.length) {
-        return startBackfill(state.view.pending.slice(0, nAuto), 'sub');
-    }
-    if (cfg.jobs.timelineAuto && cfg.jobs.timelineBackend === 'sub' && pendingChunks().length) return startTimeline('sub');
-    if (cfg.people?.enabled === false) return;
-    // 卡里没写角色描述就估不了,别每轮都弹一次提示;老失败也别无限重试
-    if (needsAffinityInit(state.memory, cfg.people) && state.affinityInitTried < 2 && cardDescription().trim()) {
-        state.affinityInitTried++;
-        return startAffinityInit('sub');
-    }
-    if (cfg.people?.modules?.arc !== false) {
-        if (pendingOrigins(state.view.people, state.memory.origins).length) return startOrigins('sub');
-        if (pendingAnchors(state.view.people).length) return startBreakIf('sub');
-    }
-    // 命运:先给新开的栏立念头,再按层数或剧情天数推演
     if (cfg.fate?.enabled === false) return;
     ensureThreads();
-    if (Object.values(state.memory.fate.threads).some(t => t.kind !== 'common' && !t.ideas.length && !t.ideasAsked)) {
-        return startFateIdeas('sub');
-    }
-    if (needsSurvey(state.memory.fate, cfg.fate, state.view.rows.length, state.view.lastDay)) startFateSurvey('sub');
+    if (Object.values(state.memory.fate.threads).some(t => t.kind !== 'common' && !t.ideas.length && !t.ideasAsked)
+        && tryOnce('ideas', startFateIdeas)) return;
+    if (sub && needsSurvey(state.memory.fate, cfg.fate, state.view.rows.length, state.view.lastDay)) startFateSurvey('sub');
 }
 
 /* ---------------- 召回 ---------------- */
@@ -1123,9 +1160,14 @@ function renderFate() {
         });
         for (const l of (t.log ?? []).slice(-6)) out.push(`<div class="ihf-muted">　　Day${l.day} ${escapeHtml(l.text)}</div>`);
     }
-    const leaks = leakCheck(fate, (ctx().chat ?? []).slice(-2).map(m => m.mes).join('\n'));
+    // 比对用的"本来就有的字":卡的设定 + 最新两层之前的正文,各截一段,够用又不卡
+    const chatAll = ctx().chat ?? [];
+    const older = chatAll.slice(0, -2).map(m => m.mes).join('\n');
+    const baseline = cardDescription().slice(0, 15000) + '\n' + older.slice(-15000);
+    const leaks = leakCheck(fate, chatAll.slice(-2).map(m => m.mes).join('\n'), 8, baseline);
     for (const k of leaks) {
-        out.push(`<div class="ihf-error">「${escapeHtml(k.name)}」那件还没到时候的事(${escapeHtml(k.actWhen)})好像已经被写进正文了。要不要回退重 roll 你自己看。</div>`);
+        out.push(`<div class="ihf-error">提前剧透提醒:【${escapeHtml(k.name)}】心里有件事,本来要等「${escapeHtml(k.actWhen)}」这种时候才会做,`
+            + `可最新这层正文里好像已经写出来了。如果真是模型提前写了,可以重 roll 这一层;只是用词碰巧像,就不用管。</div>`);
     }
     el.innerHTML = out.join('');
 }
@@ -1353,12 +1395,17 @@ function renderTable() {
     if (!el || ui?.current !== 'wuxian') return;
     const rows = (state.view?.rows ?? []).filter(r => !r.isUser && r.record?.summary);
     if (!rows.length) { el.innerHTML = '<span class="ihf-muted">还没有记账的楼。模型每回复一层就会多一行</span>'; return; }
+    const made = state.memory?.calendar?.start?.made;
     const cells = rows.map(r => {
         const rec = r.record;
-        const when = `Day${r.day}${r.date ? '<br><span class="ihf-muted">' + escapeHtml(formatDate(r.date)) + '</span>' : ''}`;
-        return `<tr${r.hidden ? ' class="ihf-dim"' : ''}><td>${r.index}</td><td>${when}</td><td>${escapeHtml(rec.place || '')}${rec.timeOfDay ? '<br><span class="ihf-muted">' + escapeHtml(rec.timeOfDay) + '</span>' : ''}</td><td>${escapeHtml(rec.summary)}</td><td>${escapeHtml((rec.names ?? []).join('、'))}</td></tr>`;
+        // 剧情里的时间:日期 + 时段(道长 9/18 要的);Day 几放小字
+        const date = r.date ? escapeHtml(formatDate(r.date)) : '';
+        const when = `${date}${rec.timeOfDay ? ' ' + escapeHtml(rec.timeOfDay) : ''}<br><span class="ihf-muted">Day${r.day}</span>`;
+        return `<tr${r.hidden ? ' class="ihf-dim"' : ''}><td>${r.index}</td><td class="ihf-nowrap">${when}</td><td>${escapeHtml(rec.place || '')}</td><td>${escapeHtml(rec.summary)}</td><td>${escapeHtml((rec.names ?? []).join('、'))}</td></tr>`;
     });
-    el.innerHTML = `<div class="ihf-scroll"><table class="ihf-table"><thead><tr><th>层</th><th>剧情日</th><th>地点</th><th>发生了什么</th><th>在场</th></tr></thead><tbody>${cells.join('')}</tbody></table></div><div class="ihf-muted">共 ${rows.length} 层有记录${rows.some(r => r.hidden) ? ';灰的是已被隐藏的楼' : ''}</div>`;
+    el.innerHTML = `<div class="ihf-scroll"><table class="ihf-table"><thead><tr><th>层</th><th>剧情时间</th><th>地点</th><th>发生了什么</th><th>涉及的人和地方</th></tr></thead><tbody>${cells.join('')}</tbody></table></div>`
+        + `<div class="ihf-muted">共 ${rows.length} 层有记录${rows.some(r => r.hidden) ? ';灰的是已被隐藏的楼' : ''}`
+        + `${made ? '。正文里没写日期,开局那天是按现实日子编的,正文一出现「X月X日」或「📅 09.28」这种写法就会改成正文里的' : ''}</div>`;
 }
 
 /** 🎲 事件影响力:浮出过的事离现在多远、还剩多少影响;下面一排是幕后这几天的活动量 */
@@ -1526,11 +1573,15 @@ const PAGE_HTML = {
 
     renlei: `
       <div id="ihf-people-view" class="ihf-rows"></div>
-      <div class="ihf-acts">
-        <button id="ihf-affinit" class="ihf-btn" title="按人设和开场白,给每个人估一个开局好感">估一下开局好感</button>
-        <button id="ihf-origins" class="ihf-btn" title="从人设里摘出每个人的性格原句,性格弧从这儿起">从人设里摘性格</button>
-        <button id="ihf-breakif" class="ihf-btn" title="性格定型之后,问模型什么事会让它再变">问什么事会改性格</button>
-      </div>
+      <details class="ihf-manual">
+        <summary>手动重跑(平时不用点)</summary>
+        <div class="ihf-muted">开局好感、性格原句、什么事会改性格,开局都会自动做:选了副 API 用副 API,没选就用主 API。自动那次失败了,或者你想重来,才点这里。</div>
+        <div class="ihf-acts">
+          <button id="ihf-affinit" class="ihf-btn" title="按人设和开场白,给每个人估一个开局好感">估一下开局好感</button>
+          <button id="ihf-origins" class="ihf-btn" title="从人设里摘出每个人的性格原句,性格弧从这儿起">从人设里摘性格</button>
+          <button id="ihf-breakif" class="ihf-btn" title="性格定型之后,问模型什么事会让它再变">问什么事会改性格</button>
+        </div>
+      </details>
       <div class="ihf-muted">数都是按各层的加减现算的,不存死值。改了楼、滑了 swipe,重新对账就跟着变。</div>
       <hr class="ihf-sep">
       <div class="ihf-card">
@@ -1566,10 +1617,14 @@ const PAGE_HTML = {
     mingyun: `
       <div class="ihf-card"><h4>事件影响力</h4><div id="ihf-fate-chart"></div></div>
       <div id="ihf-fate-view" class="ihf-rows"></div>
-      <div class="ihf-acts">
-        <button id="ihf-fate-ideas" class="ihf-btn" title="给每个 NPC 定几条长期念头,沉在水下慢慢酝酿">给 NPC 定幕后念头</button>
-        <button id="ihf-fate-survey" class="ihf-btn" title="让 NPC 和世界在幕后过几天,更新各自的动向">推演一次幕后</button>
-      </div>
+      <details class="ihf-manual">
+        <summary>手动重跑(平时不用点)</summary>
+        <div class="ihf-muted">给 NPC 定念头开局会自动做;幕后推演每隔几层自动跑一次,这个要选了副 API 才跑,不占你主线的额度。</div>
+        <div class="ihf-acts">
+          <button id="ihf-fate-ideas" class="ihf-btn" title="给每个 NPC 定几条长期念头,沉在水下慢慢酝酿">给 NPC 定幕后念头</button>
+          <button id="ihf-fate-survey" class="ihf-btn" title="让 NPC 和世界在幕后过几天,更新各自的动向">推演一次幕后</button>
+        </div>
+      </details>
       <hr class="ihf-sep">
       <div class="ihf-card">
         <h4>命运设置</h4>

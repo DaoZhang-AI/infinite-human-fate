@@ -124,31 +124,45 @@ export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE) {
         rows.push({ index: i, fp, isUser, hidden: !!m.is_system, record: rec, day: null, date: null });
     }
 
-    // 历法:起点日期没定就从旧楼里找
-    if (!memory.calendar.start) {
-        const found = detectStartDate(rows.map(r => ({ dayNo: r.record?.abs ?? null, text: chat[r.index].mes })));
-        if (found) memory.calendar.start = { year: null, month: found.month, day: found.day };
-    }
-    const start = memory.calendar.start;
-
     // 增量是"相对上一层 AI 楼",所以只要前面有过 AI 楼(哪怕它没记账,比如开场白),这层的增量就算数。
     // 只有全场第一层 AI 楼的增量没有参照,不算。
-    let day = 1;
-    let seenAi = false;
-    for (const r of rows) {
-        const rec = r.record;
-        if (!r.isUser) {
-            if (rec && Number.isFinite(rec.abs) && rec.abs > 0) {
-                day = rec.abs;
-            } else if (rec && seenAi) {
-                const cur = start ? dayToDate(start, day) : null;
-                day += parseDelta(rec.timeRaw, cur).days;
+    const countDays = start => {
+        let day = 1;
+        let seenAi = false;
+        for (const r of rows) {
+            const rec = r.record;
+            if (!r.isUser) {
+                if (rec && Number.isFinite(rec.abs) && rec.abs > 0) {
+                    day = rec.abs;
+                } else if (rec && seenAi) {
+                    const cur = start ? dayToDate(start, day) : null;
+                    day += parseDelta(rec.timeRaw, cur).days;
+                }
+                seenAi = true;
             }
-            seenAi = true;
+            r.day = day;
+            r.date = start ? dayToDate(start, day) : null;
         }
-        r.day = day;
-        r.date = start ? dayToDate(start, day) : null;
+        return day;
+    };
+
+    // 历法:起点日期没定(或者是编的)就从正文里找。先数一遍天数,找到的日期按那一层是第几天倒推起点
+    let day = countDays(memory.calendar.start);
+    if (!memory.calendar.start || memory.calendar.start.made) {
+        // 先只信写明了「Day N」的楼(老规矩,最准);一层都没有才退而用数出来的天数
+        const found = detectStartDate(rows.map(r => ({ dayNo: r.record?.abs ?? null, text: chat[r.index].mes })))
+            ?? detectStartDate(rows.map(r => ({ dayNo: r.isUser ? null : r.day, text: chat[r.index].mes })));
+        if (found) {
+            memory.calendar.start = { year: null, month: found.month, day: found.day };
+        } else if (!memory.calendar.start) {
+            // 正文里一个日期都没有:编一个(道长 9/18:如果没有就编造一个),按开局那天的现实月日,标上是编的
+            const first = new Date(chat[0]?.send_date ?? NaN);
+            const ok = !Number.isNaN(first.getTime());
+            memory.calendar.start = { year: null, month: ok ? first.getMonth() + 1 : 1, day: ok ? first.getDate() : 1, made: true };
+        }
+        day = countDays(memory.calendar.start);
     }
+    const start = memory.calendar.start;
 
     const pending = rows.filter(r => !r.isUser && !r.hidden && !r.record).map(r => r.index);
     // 好感、性格弧、情绪、约定账和日期一样,都是按楼序现折算出来的,不存死值

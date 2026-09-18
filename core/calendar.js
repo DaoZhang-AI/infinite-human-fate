@@ -137,19 +137,37 @@ export function fuzzyAgo(diff, oldMonth = null) {
  * @param {{dayNo:number|null, text:string}[]} floors 按楼序
  * @returns {{year:null, month:number, day:number}|null}
  */
+/** 正文里的日期写法:「9月28日」,或者状态栏常见的「📅 09.28」「日期:09/28」(道长 9/18:她的卡都是后一种) */
+const DATE_PATTERNS = [
+    /(\d{1,2})\s*月\s*(\d{1,2})\s*日/,
+    /(?:📅|日期[::]?)\s*(?:\d{4}\s*[./-]\s*)?(\d{1,2})\s*[./-]\s*(\d{1,2})(?!\d)/,
+];
+
 export function detectStartDate(floors) {
     for (const f of floors) {
         if (!f.dayNo) continue;
-        const m = String(f.text).match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-        if (!m) continue;
-        const month = Number(m[1]);
-        const day = Number(m[2]);
-        if (month < 1 || month > 12 || day < 1 || day > 31) continue;
-        return dayToDate({ year: null, month, day }, 2 - f.dayNo);
+        for (const re of DATE_PATTERNS) {
+            const m = String(f.text).match(re);
+            if (!m) continue;
+            const month = Number(m[1]);
+            const day = Number(m[2]);
+            if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+            return dayToDate({ year: null, month, day }, 2 - f.dayNo);
+        }
     }
     return null;
 }
 
+const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+function cnNumber(n) {
+    if (n <= 10) return CN_NUM[n];
+    if (n < 20) return '十' + CN_NUM[n - 10];
+    if (n < 100) return CN_NUM[Math.floor(n / 10)] + '十' + (n % 10 ? CN_NUM[n % 10] : '');
+    return String(n);
+}
+
+/** 有年份写「2026年9月28日」;没年份写「第一年9月28日」,跨了年就是第二年(道长 9/18:年可以留空) */
 export function formatDate(d) {
-    return `${d.month}月${d.day}日`;
+    const year = d.year ? `${d.year}年` : `第${cnNumber(Math.max(1, (d.yearsPassed ?? 0) + 1))}年`;
+    return `${year}${d.month}月${d.day}日`;
 }

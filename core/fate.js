@@ -299,8 +299,15 @@ export function settlePending(fate, cfg, floor, confirmedNames) {
  * 它描述的是一件具体的、此刻还不该发生的事,重合够长就说明那件事真被写出来了。
  * 只提醒不拦(改不了正文),让道长自己决定要不要回退重 roll。
  */
-export function leakCheck(fate, text, min = 6) {
-    const body = String(text ?? '').replace(/[\s,，。、;；:：!！?？"'“”‘’()（）]/g, '');
+/**
+ * baseline = 卡的设定和更早的正文。9/18 误报的教训:一张卡里「那部旧手机响了,他接起来」天天出现,
+ * 触发条件恰好也这么写,于是每层都报"已经写进正文了"。
+ * 所以只有最新正文和触发条件的重合,**比设定和旧正文里本来就有的重合多出 margin 字以上**,才算真漏了。
+ */
+export function leakCheck(fate, text, min = 8, baseline = '', margin = 4) {
+    const strip = s => String(s ?? '').replace(/[\s,，。、;；:：!！?？"'“”‘’()（）…—]/g, '');
+    const body = strip(text);
+    const base = strip(baseline);
     const hits = [];
     if (body.length < min) return hits;
     for (const t of Object.values(fate.threads ?? {})) {
@@ -308,9 +315,11 @@ export function leakCheck(fate, text, min = 6) {
             if (idea.state !== '进行中' || !idea.actWhen) return;
             // 已经排队等浮出的那条不算漏,它本来就该写出来
             if (fate.pending && fate.pending.name === t.name && fate.pending.ideaIdx === i) return;
-            const want = idea.actWhen.replace(/[\s,，。、;；:：!！?？"'“”‘’()（）]/g, '');
+            const want = strip(idea.actWhen);
             const n = lcsLen(want, body);
-            if (n >= min) hits.push({ name: t.name, idea: idea.text, actWhen: idea.actWhen, overlap: n });
+            if (n < min) return;
+            if (base && n < lcsLen(want, base) + margin) return;
+            hits.push({ name: t.name, idea: idea.text, actWhen: idea.actWhen, overlap: n });
         });
     }
     return hits;
