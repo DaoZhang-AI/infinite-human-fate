@@ -171,3 +171,29 @@ export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE) {
         : foldPeople(rows, peopleCfg, memory.origins ?? {}, memory.anchors ?? {}, memory.affinityStart ?? {});
     return { rows, added, pending, lastDay: day, start, ...folded };
 }
+
+/**
+ * 聊天里已经找不到的楼(删掉的、重 roll 滑走的),摘要和向量一起清掉(道长 9/18)。
+ * 清掉的指纹记进 memory.pruned(指纹 → 清掉的时间),两台设备合并时靠它挡住对面的旧副本灌回来。
+ * @param {object} memory
+ * @param {Iterable<string>} liveFps 当前聊天里每一层的指纹
+ * @returns {number} 清掉了几条
+ */
+export function pruneOrphans(memory, liveFps, now = Date.now()) {
+    const live = new Set(liveFps);
+    const floors = memory?.floors ?? {};
+    let n = 0;
+    for (const fp of Object.keys(floors)) {
+        if (live.has(fp)) continue;
+        delete floors[fp];
+        memory.pruned = memory.pruned ?? {};
+        memory.pruned[fp] = now;
+        n++;
+    }
+    // 清单只留最近的 2000 条,重 roll 多了也不至于越攒越大
+    const keys = Object.keys(memory?.pruned ?? {});
+    if (keys.length > 2000) {
+        keys.sort((a, b) => memory.pruned[a] - memory.pruned[b]).slice(0, keys.length - 2000).forEach(k => delete memory.pruned[k]);
+    }
+    return n;
+}

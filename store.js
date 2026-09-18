@@ -235,8 +235,15 @@ export function mergeMemory(local, remote) {
         const b = other?.at ?? 0;
         if (!other || a > b || (a === b && (rec.vec || !other.vec))) floors[fp] = rec;
     }
+    // 删掉的、滑走的楼,两边谁清过都算清过;清掉之后又重新记的(比如滑回来那一版)才留(道长 9/18)
+    const pruned = { ...(isPlainObject(remote.pruned) ? remote.pruned : {}) };
+    for (const [fp, at] of Object.entries(isPlainObject(local.pruned) ? local.pruned : {})) pruned[fp] = Math.max(at, pruned[fp] ?? 0);
+    for (const [fp, at] of Object.entries(pruned)) {
+        if (floors[fp] && (floors[fp].at ?? 0) <= at) delete floors[fp];
+    }
     return {
         ...local,
+        pruned,
         floors,
         calendar: local.calendar?.start ? local.calendar : remote.calendar,
         timeline: { ...(isPlainObject(remote.timeline) ? remote.timeline : {}), ...(isPlainObject(local.timeline) ? local.timeline : {}) },

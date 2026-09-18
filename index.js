@@ -13,7 +13,7 @@
  */
 
 import { buildLedgerInstruction, stripLedger } from './core/ledger.js';
-import { emptyMemory, reconcile, recordFromLedgerText } from './core/memory.js';
+import { emptyMemory, pruneOrphans, reconcile, recordFromLedgerText } from './core/memory.js';
 import { formatDate } from './core/calendar.js';
 import { fingerprint } from './core/fingerprint.js';
 import { alignCoreToRaw, buildMemoryBlock, planZones } from './core/assemble.js';
@@ -28,7 +28,7 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.6';
+const VERSION = '0.9.7';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -169,7 +169,10 @@ function refresh(forceSave = false) {
     if (state.config?.enabled === false) return;
     if (!state.memory || c.getCurrentChatId() !== state.chatId) return;
     state.view = reconcile(state.memory, c.chat, state.config.people);
-    if (state.view.added || (forceSave && !state.memory.updated)) scheduleSave();
+    // 删掉的楼、重 roll 滑走的那一版,摘要和向量一起清掉(道长 9/18)
+    const pruned = pruneOrphans(state.memory, state.view.rows.map(r => r.fp));
+    if (pruned) console.info(LOG, `聊天里找不到的楼清掉了 ${pruned} 条记录`);
+    if (pruned || state.view.added || (forceSave && !state.memory.updated)) scheduleSave();
     if (state.config.fate?.enabled !== false && state.memory.fate) ensureThreads();
     settleFate();
     checkWorldDue();
@@ -753,18 +756,23 @@ function autoJobs() {
 
     // 每层都要跑的活(记账、补旧账、压时间线、幕后推演)只走副 API,不占主线额度
     if (sub) {
+        // 最新那层 AI 回复先不写摘要:有人会重 roll,写了也白写(道长 9/18)。
+        // 等她接着往下聊、它不再是最新的了,才轮到它
+        const ais = state.view.rows.filter(r => !r.isUser && !r.hidden);
+        const newest = ais.at(-1)?.index;
         if (cfg.ledger.mode === 'sub-after') {
-            const lastAi = [...state.view.rows].reverse().find(r => !r.isUser && !r.hidden);
-            if (lastAi && !lastAi.record) {
-                startBackfill([lastAi.index], 'sub');
+            const settled = ais.at(-2);
+            if (settled && !settled.record) {
+                startBackfill([settled.index], 'sub');
                 return;
             }
         }
         // 几百层的老聊天一次补不完:每轮生成后从最早的往后补几层旧账,分批慢慢补完
-        // (道长:必须从第 0 层往现在补,倒着补时间线会乱)
+        // (道长:必须从第 0 层往现在补,倒着补时间线会乱)。同样跳过最新那层
         const nAuto = Math.max(0, Math.floor(Number(cfg.jobs.backfillAuto) || 0));
-        if (nAuto && cfg.jobs.backfillBackend === 'sub' && state.view.pending.length) {
-            return startBackfill(state.view.pending.slice(0, nAuto), 'sub');
+        const older = state.view.pending.filter(i => i !== newest);
+        if (nAuto && cfg.jobs.backfillBackend === 'sub' && older.length) {
+            return startBackfill(older.slice(0, nAuto), 'sub');
         }
         if (cfg.jobs.timelineAuto && cfg.jobs.timelineBackend === 'sub' && pendingChunks().length) return startTimeline('sub');
     }
@@ -1745,7 +1753,7 @@ const PAGE_HTML = {
           <label><span class="ihf-lab">档位</span><select id="ihf-tier"><option value="">跟着模型自动</option><option value="big">锁定大模型档</option><option value="small">锁定小模型档</option></select></label>
           <label><input type="checkbox" id="ihf-recall-on"> 开启召回</label>
           <label><span class="ihf-lab">召回查询</span><select id="ihf-qmode"><option value="split">分开用(推荐)</option><option value="concat">拼在一起</option></select></label>
-          <label><span class="ihf-lab">每层记账</span><select id="ihf-ledger"><option value="main-inline">主 API 随正文写</option><option value="sub-after">副 API 回复后补写</option><option value="off">不记</option></select></label>
+          <label><span class="ihf-lab">每层记账</span><select id="ihf-ledger"><option value="main-inline">主 API 随正文写</option><option value="sub-after">副 API 补写(晚一层写,重 roll 不白写)</option><option value="off">不记</option></select></label>
         </div>
       </div>
       <div class="ihf-card">
