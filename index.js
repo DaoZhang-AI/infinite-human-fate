@@ -651,10 +651,11 @@ function autoJobs() {
             return;
         }
     }
-    // 几百层的老聊天一次补不完:每轮生成后从最近的往前补几层旧账,分批慢慢补完
+    // 几百层的老聊天一次补不完:每轮生成后从最早的往后补几层旧账,分批慢慢补完
+    // (道长:必须从第 0 层往现在补,倒着补时间线会乱)
     const nAuto = Math.max(0, Math.floor(Number(cfg.jobs.backfillAuto) || 0));
     if (nAuto && cfg.jobs.backfillBackend === 'sub' && state.view.pending.length) {
-        return startBackfill(state.view.pending.slice(-nAuto).reverse(), 'sub');
+        return startBackfill(state.view.pending.slice(0, nAuto), 'sub');
     }
     if (cfg.jobs.timelineAuto && cfg.jobs.timelineBackend === 'sub' && pendingChunks().length) return startTimeline('sub');
     if (cfg.people?.enabled === false) return;
@@ -1436,7 +1437,7 @@ const PAGE_HTML = {
           <label><span class="ihf-lab">压时间线用</span><select id="ihf-tl-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
           <label><input type="checkbox" id="ihf-tl-auto"> 压时间线用副 API 时,自动压</label>
           <label><span class="ihf-lab">自动补旧账</span>补记账用副 API 时,每次生成后补 <input type="number" id="ihf-bf-auto" min="0" max="50"> 层(0 = 不自动)</label>
-          <div class="ihf-muted">几百层的老聊天一次补不完,从最近的往前一批一批补,几轮下来就补齐了。</div>
+          <div class="ihf-muted">几百层的老聊天一次补不完,从第 0 层往现在一批一批补,几轮下来就补齐了。</div>
           <label><span class="ihf-lab">限速</span>每分钟最多 <input type="number" id="ihf-rpm" min="1" max="60"> 次</label>
           <div id="ihf-sub-warn" class="ihf-error" style="display:none">⚠️ 副 API 和主线是同一个站。插件每轮会多打几次,免费站限并发,容易把主线一起打死。换一个站当副 API 更稳。</div>
           <button id="ihf-save2" class="ihf-btn ihf-primary">保存设置</button>
