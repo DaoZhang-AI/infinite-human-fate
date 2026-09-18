@@ -1,5 +1,5 @@
 /**
- * 无限人类命运 · 服务端转发插件
+ * 模拟人生 · 服务端转发插件
  *
  * 只干一件事:替浏览器把嵌入(embeddings)、重排(rerank)、拉模型列表(models)
  * 这三种请求发到向量站去。这样公益站看到的是酒馆服务器在发,不是浏览器。
@@ -19,7 +19,7 @@ const PLUGIN_VERSION = '0.1.0';
 
 const info = {
     id: PLUGIN_ID,
-    name: '无限人类命运',
+    name: '模拟人生',
     description: '向量召回的服务端转发:嵌入、重排、拉模型列表都由酒馆服务器代发。',
 };
 
@@ -96,7 +96,7 @@ async function init(router) {
 
     router.post('/models', relay('/models', 'GET'));
 
-    console.log(`[${PLUGIN_ID}] 无限人类命运服务端转发已加载 v${PLUGIN_VERSION}`);
+    console.log(`[${PLUGIN_ID}] 模拟人生服务端转发已加载 v${PLUGIN_VERSION}`);
 }
 
 module.exports = { info, init };

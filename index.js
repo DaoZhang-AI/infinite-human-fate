@@ -1,5 +1,5 @@
 /**
- * 无限人类命运:RP 长局记忆插件。
+ * 模拟人生(原名无限人类命运):RP 长局记忆插件。
  * 任务书:memory-graph/项目记忆/酒馆/20260911-RP记忆插件任务书.md
  *
  * 第一段(地基):换聊天时读记忆文件;每层消息落地后按正文指纹对账,新楼解析记账块或导入旧 Narrative_Matrix。
@@ -28,9 +28,9 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.8';
-const LOG = '[无限人类命运]';
-const TITLE = '无限人类命运';
+const VERSION = '0.9.9';
+const LOG = '[模拟人生]';
+const TITLE = '模拟人生';
 
 /** setExtensionPrompt 的键 */
 const KEY_LEDGER = 'ihf_ledger';
@@ -1524,7 +1524,7 @@ async function importMemory(file) {
     try {
         const data = JSON.parse(await file.text());
         const mem = data?.format === 'ihf-export' ? data.memory : data;
-        if (!mem || typeof mem !== 'object' || !mem.floors || typeof mem.floors !== 'object') throw new Error('这不是无限人类命运导出的记忆文件');
+        if (!mem || typeof mem !== 'object' || !mem.floors || typeof mem.floors !== 'object') throw new Error('这不是模拟人生(原名无限人类命运)导出的记忆文件');
         const before = Object.keys(state.memory.floors).length;
         state.memory = mergeMemory(normalizeTimeline(mem), state.memory);
         if (!state.memory.calendar?.start && mem.calendar?.start) state.memory.calendar = mem.calendar;
@@ -1938,7 +1938,7 @@ function mountPanel() {
 <div class="ihf-settings">
   <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
-      <b>无限人类命运 <span class="ihf-muted">v${VERSION}</span><span id="ihf-new" class="ihf-new" hidden>New!</span></b>
+      <b>模拟人生 <span class="ihf-muted">v${VERSION}</span><span id="ihf-new" class="ihf-new" hidden>New!</span></b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">

@@ -255,7 +255,7 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
 
     const ball = document.createElement('div');
     ball.id = 'ihf-ball';
-    ball.title = '无限人类命运,点开看;可以拖';
+    ball.title = '模拟人生,点开看;可以拖';
     ball.innerHTML = '<span class="ihf-ball-icon"></span><span class="ihf-ball-dot"></span>';
     ball.querySelector('.ihf-ball-icon').textContent = emoji;
     document.body.appendChild(ball);
@@ -267,7 +267,7 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
     overlay.innerHTML = `
 <div id="ihf-panel">
   <div class="ihf-head">
-    <span class="ihf-head-title">无限人类命运<span class="ihf-head-ver">v${version}</span></span>
+    <span class="ihf-head-title">模拟人生<span class="ihf-head-ver">v${version}</span></span>
     <span class="ihf-head-spacer"></span>
     <button class="ihf-icon-btn" data-page-btn="shezhi" title="设置">⚙️</button>
     <button class="ihf-icon-btn" data-page-btn="bangzhu" title="帮助">❓</button>
