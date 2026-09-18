@@ -21,11 +21,14 @@ export const FILES = {
 export const DEFAULT_CONFIG = {
     version: 1,
     enabled: true,
-    siliconflow: {
-        base_url: 'https://api.siliconflow.cn/v1',
-        key: '',
-        embed_model: 'BAAI/bge-m3',
-        rerank_model: 'BAAI/bge-reranker-v2-m3',
+    /** 向量召回用的站。嵌入和重排各自一套地址 / key / 模型,不绑死一家(大家用的公益站不一样)。
+     *  重排整组可以空着,空着就只按向量排。models 是面板「拉取模型」拉回来的列表,存着下次还能选。
+     *  via:auto = 装了服务端转发插件就经酒馆服务器发,没装就浏览器直连;server / direct 锁死。
+     *  旧版的 siliconflow 那一块还认,第一次读会自动搬到这里。 */
+    vector: {
+        embed: { url: 'https://api.siliconflow.cn/v1', key: '', model: 'BAAI/bge-m3', models: [] },
+        rerank: { url: '', key: '', model: '', models: [] },
+        via: 'auto',
     },
     ledger: {
         /** main-inline = 主 API 随正文写;sub-after = 每层回复后让副 API 补写;off = 不记 */
@@ -42,6 +45,9 @@ export const DEFAULT_CONFIG = {
         timelineBackend: 'main',
         /** 压时间线选了副 API 时,有整段滑出摘要区就自动压 */
         timelineAuto: true,
+        /** 补记账选了副 API 时,每次生成结束后自动补几层旧账(从最近的往前补)。
+         *  几百层的老聊天一次补不完,分批慢慢补;0 = 不自动,只靠手点「补记账」 */
+        backfillAuto: 8,
         /** 每分钟最多发几次(苍穹这类免费站限高并发,自律 5 次) */
         rpm: 5,
         /** 副 API 活的回复上限。会思考的模型(Gemini 3.1 Pro 这类)思考也算在里面,
@@ -181,8 +187,23 @@ export async function saveConfigPatch(patch, headers) {
 
 /** 读设置。只读不写:缺字段在内存里补,不回写她手填的文件 */
 export async function loadConfig() {
-    const cfg = mergeDefaults(DEFAULT_CONFIG, await readJson(FILES.config));
-    cfg.siliconflow.key = String(cfg.siliconflow.key ?? '').trim();
+    const got = await readJson(FILES.config);
+    const cfg = mergeDefaults(DEFAULT_CONFIG, got);
+    // 旧版只有 siliconflow 一块:她填过 key 的话搬到新结构,嵌入和重排都指向同一家
+    const old = got?.siliconflow;
+    if (isPlainObject(old) && !got?.vector) {
+        const url = String(old.base_url ?? '').trim() || cfg.vector.embed.url;
+        const key = String(old.key ?? '').trim();
+        cfg.vector.embed = { ...cfg.vector.embed, url, key, model: String(old.embed_model ?? '').trim() || cfg.vector.embed.model };
+        if (key) cfg.vector.rerank = { ...cfg.vector.rerank, url, key, model: String(old.rerank_model ?? '').trim() || 'BAAI/bge-reranker-v2-m3' };
+    }
+    for (const k of ['embed', 'rerank']) {
+        const ep = cfg.vector[k];
+        ep.url = String(ep.url ?? '').trim();
+        ep.key = String(ep.key ?? '').trim();
+        ep.model = String(ep.model ?? '').trim();
+        if (!Array.isArray(ep.models)) ep.models = [];
+    }
     return cfg;
 }
 

@@ -23,12 +23,12 @@ import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, bu
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
 import { mountShell } from './ui.js';
 import { COMMON, WORLD, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
-import { embed, rerank } from './siliconflow.js';
+import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -188,7 +188,7 @@ async function saveMemory() {
 }
 
 function vectorCounts() {
-    const model = state.config?.siliconflow.embed_model;
+    const model = state.config?.vector.embed.model;
     const recs = Object.values(state.memory?.floors ?? {}).filter(r => r.summary);
     return { total: recs.length, done: recs.filter(r => vecFresh(r, model)).length };
 }
@@ -196,9 +196,10 @@ function vectorCounts() {
 /** 后台补向量:一批一批算,算好就存进记忆文件。不拖生成,生成时只用已经算好的 */
 async function ensureVectors() {
     const cfg = state.config;
-    if (state.emb.running || !state.memory || !cfg?.recall.enabled || !cfg.siliconflow.key) return;
+    // 总开关关着就什么都不做(道长:关掉之后任何功能都不再介入酒馆)
+    if (state.emb.running || !state.memory || cfg?.enabled === false || !cfg?.recall.enabled || !endpointReady(cfg.vector.embed)) return;
     const memId = state.memId;
-    const model = cfg.siliconflow.embed_model;
+    const model = cfg.vector.embed.model;
     const todo = Object.values(state.memory.floors).filter(r => r.summary && !vecFresh(r, model));
     if (!todo.length) return;
     state.emb.running = true;
@@ -209,7 +210,7 @@ async function ensureVectors() {
         for (let i = 0; i < todo.length; i += batch) {
             if (state.memId !== memId) break; // 换聊天了,下次打开再接着补
             const part = todo.slice(i, i + batch);
-            const vecs = await embed(part.map(docText), cfg.siliconflow);
+            const vecs = await embed(part.map(docText), cfg.vector);
             part.forEach((r, k) => { r.vec = makeVec(r, model, vecs[k]); });
             scheduleSave();
             render();
@@ -641,13 +642,19 @@ function settleFate() {
  *  再顺手把缺的性格原句和破锚条件补上。一次只起一件,跑完 refresh 会再进来一次。 */
 function autoJobs() {
     const cfg = state.config;
-    if (!cfg || !state.view || state.jobs.running || state.generating || !cfg.jobs.subProfile) return;
+    // 总开关关着就一个后台活都不跑(道长:关掉之后任何功能都不再介入酒馆)
+    if (!cfg || cfg.enabled === false || !state.view || state.jobs.running || state.generating || !cfg.jobs.subProfile) return;
     if (cfg.ledger.mode === 'sub-after') {
         const lastAi = [...state.view.rows].reverse().find(r => !r.isUser && !r.hidden);
         if (lastAi && !lastAi.record) {
             startBackfill([lastAi.index], 'sub');
             return;
         }
+    }
+    // 几百层的老聊天一次补不完:每轮生成后从最近的往前补几层旧账,分批慢慢补完
+    const nAuto = Math.max(0, Math.floor(Number(cfg.jobs.backfillAuto) || 0));
+    if (nAuto && cfg.jobs.backfillBackend === 'sub' && state.view.pending.length) {
+        return startBackfill(state.view.pending.slice(-nAuto).reverse(), 'sub');
     }
     if (cfg.jobs.timelineAuto && cfg.jobs.timelineBackend === 'sub' && pendingChunks().length) return startTimeline('sub');
     if (cfg.people?.enabled === false) return;
@@ -687,12 +694,13 @@ async function runRecall(raw, view, zones, tier) {
     if (!rc.enabled || !cands.length || !qs) return { items: [], ms: 0, notes };
     if (qs.short) notes.push('这句太短,带上了 AI 回复一起查');
 
-    const sf = cfg.siliconflow;
+    const vec = cfg.vector;
+    const embedOk = endpointReady(vec.embed);
     let maps = [];
-    if (sf.key) {
+    if (embedOk) {
         try {
-            const qvecs = (await embed(qs.pool, sf, 8000)).map(normalize);
-            maps = cosineMaps(qvecs, cands, sf.embed_model);
+            const qvecs = (await embed(qs.pool, vec, 8000)).map(normalize);
+            maps = cosineMaps(qvecs, cands, vec.embed.model);
             const n = maps[0]?.size ?? 0;
             if (n < cands.length) notes.push(`向量还没补完 ${n}/${cands.length}`);
         } catch (e) {
@@ -700,15 +708,15 @@ async function runRecall(raw, view, zones, tier) {
             console.warn(LOG, e);
         }
     } else {
-        notes.push('没填 key,只按专名找');
+        notes.push('嵌入站没填,只按专名找');
     }
 
     const cos = bestCosine(maps);
     const pool = pickPool(cands, maps, qs.rank, rc);
     const rr = new Map();
-    if (sf.key && pool.length) {
+    if (embedOk && endpointReady(effectiveRerank(vec)) && pool.length) {
         try {
-            const res = await rerank(qs.rank, pool.map(r => docText(r.record)), sf, 8000);
+            const res = await rerank(qs.rank, pool.map(r => docText(r.record)), vec, 8000);
             for (const x of res) if (pool[x.index]) rr.set(pool[x.index].index, x.relevance_score);
         } catch (e) {
             notes.push('重排失败,按向量排');
@@ -1001,7 +1009,8 @@ function render() {
         if (jd) lines.push(escapeHtml(jd));
         if (state.emb.error) lines.push(`<span class="ihf-error">补向量失败:${escapeHtml(state.emb.error)}</span>`);
         for (const w of detectLegacy()) lines.push(`<span class="ihf-error">${escapeHtml(w)},建议关掉,免得两套记忆一起发</span>`);
-        if (!state.config.siliconflow.key) lines.push('<span class="ihf-error">硅基流动 key 没填,召回只能按专名找</span>');
+        if (!endpointReady(state.config.vector.embed)) lines.push('<span class="ihf-error">嵌入站还没填(⚙️ 设置里的「向量召回」),召回只能按专名找</span>');
+        else if (state.config.recall.enabled) lines.push(`<span class="ihf-muted">向量请求${relayAvailable() && state.config.vector.via !== 'direct' ? '经酒馆服务器转发' : '由浏览器直连'}</span>`);
     }
     if (state.error) lines.push(`<span class="ihf-error">${escapeHtml(state.error)}</span>`);
     el.innerHTML = lines.join('<br>');
@@ -1177,6 +1186,60 @@ function renderPeople() {
 }
 
 /** 设置表单:从 state.config 填进去 */
+/** 面板上嵌入 / 重排那一组现在填的是什么。models 不从表单读,拉取时单独存 */
+function readEndpointForm(k) {
+    return {
+        url: String($(`#ihf-${k}-url`).val() ?? '').trim().replace(/\/+$/, ''),
+        key: String($(`#ihf-${k}-key`).val() ?? '').trim(),
+        model: String($(`#ihf-${k}-model`).val() ?? '').trim(),
+    };
+}
+
+/** 模型下拉:datalist 既能从拉回来的列表里挑,也能手填(有的站不给列表) */
+function fillModelList(k, models, current) {
+    const list = [...new Set([...(models ?? []), current].filter(Boolean))];
+    $(`#ihf-${k}-models`).html(list.map(m => `<option value="${escapeHtml(m)}">`).join(''));
+    $(`#ihf-${k}-count`).text(models?.length ? `列表里有 ${models.length} 个,也可以直接手填` : '还没拉过列表,可以直接手填模型名');
+}
+
+function renderRelayState() {
+    const via = String($('#ihf-via').val() || state.config?.vector.via || 'auto');
+    const ok = relayAvailable();
+    let text;
+    if (via === 'direct') text = '浏览器直连。公益站别走这条,会被封;硅基流动这类官方站可以。';
+    else if (ok) text = '服务端转发插件在,向量请求经酒馆服务器发出,公益站看到的是酒馆。';
+    else if (via === 'server') text = '<span class="ihf-error">锁定了转发,但探不到服务端插件,向量请求会全部失败。装法见 ❓ 帮助。</span>';
+    else text = '<span class="ihf-error">没探到服务端转发插件,现在是浏览器直连。用公益站的嵌入接口请先装转发插件(装法见 ❓ 帮助)。</span>';
+    $('#ihf-relay-state').html(text);
+}
+
+/** 「拉取模型」:用表单里现填的地址和 key 去问 /models,拉到就存进设置文件,下次打开还在 */
+async function onFetchModels(k) {
+    const ep = readEndpointForm(k);
+    if (!ep.url) return toastr.warning('先填地址', TITLE);
+    const $btn = $(`#ihf-${k}-fetch`).prop('disabled', true).text('拉取中…');
+    try {
+        const models = await listModels(ep, String($('#ihf-via').val() || 'auto'));
+        if (!models.length) {
+            toastr.info('对面没返回任何模型。有的站不给列表,自己在模型框里手填一个就行', TITLE);
+            return;
+        }
+        fillModelList(k, models, ep.model);
+        if (!ep.model || !models.includes(ep.model)) {
+            // 嵌入站优先挑 bge-m3 这类明显是嵌入的;挑不出就第一个
+            const guess = models.find(m => /bge|embed|e5|minilm|rerank/i.test(m) && (k === 'rerank') === /rerank/i.test(m)) ?? models[0];
+            $(`#ihf-${k}-model`).val(guess);
+        }
+        await saveConfigPatch({ vector: { [k]: { models } } }, ctx().getRequestHeaders());
+        state.config.vector[k].models = models;
+        toastr.success(`拉到 ${models.length} 个模型,列表已存`, TITLE);
+    } catch (e) {
+        toastr.error('拉不到模型列表:' + (e?.message ?? e) + '。有的站本来就不给列表,那就手填模型名', TITLE);
+    } finally {
+        $btn.prop('disabled', false).text('拉取模型');
+    }
+}
+
 function fillSettings() {
     const cfg = state.config;
     if (!cfg) return;
@@ -1201,7 +1264,22 @@ function fillSettings() {
     $('#ihf-bf-backend').val(cfg.jobs.backfillBackend);
     $('#ihf-tl-backend').val(cfg.jobs.timelineBackend);
     $('#ihf-tl-auto').prop('checked', !!cfg.jobs.timelineAuto);
+    $('#ihf-bf-auto').val(Math.max(0, Number(cfg.jobs.backfillAuto) || 0));
     $('#ihf-rpm').val(cfg.jobs.rpm);
+    // 副 API 和主线同一个站:插件每轮多打几次,会把本来就抖的公益站打死(9/17 苍穹那晚就是这样)
+    const subConn = conns.find(x => x.id === cur);
+    const mainUrl = String(ctx().chatCompletionSettings?.custom_url ?? '');
+    const host = u => { try { return new URL(u).host; } catch { return ''; } };
+    $('#ihf-sub-warn').toggle(!!(subConn?.url && mainUrl && host(subConn.url) && host(subConn.url) === host(mainUrl)));
+    for (const k of ['embed', 'rerank']) {
+        const ep = cfg.vector[k];
+        $(`#ihf-${k}-url`).val(ep.url);
+        $(`#ihf-${k}-key`).val(ep.key);
+        $(`#ihf-${k}-model`).val(ep.model);
+        fillModelList(k, ep.models, ep.model);
+    }
+    $('#ihf-via').val(cfg.vector.via || 'auto');
+    renderRelayState();
     $('#ihf-emotion').val(cfg.people.emotionMode === 'off' ? 'major' : cfg.people.emotionMode);
     const mod = cfg.people.modules ?? {};
     for (const k of ['affinity', 'emotion', 'arc', 'promise', 'item']) $(`#ihf-mod-${k}`).prop('checked', mod[k] !== false);
@@ -1227,7 +1305,13 @@ async function saveSettings() {
             backfillBackend: String($('#ihf-bf-backend').val()),
             timelineBackend: String($('#ihf-tl-backend').val()),
             timelineAuto: $('#ihf-tl-auto').prop('checked'),
+            backfillAuto: Math.max(0, Math.min(50, Math.floor(Number($('#ihf-bf-auto').val()) || 0))),
             rpm: Math.max(1, Math.min(60, Number($('#ihf-rpm').val()) || 5)),
+        },
+        vector: {
+            embed: readEndpointForm('embed'),
+            rerank: readEndpointForm('rerank'),
+            via: String($('#ihf-via').val() || 'auto'),
         },
         people: {
             emotionMode: String($('#ihf-emotion').val()),
@@ -1351,9 +1435,31 @@ const PAGE_HTML = {
           <label><span class="ihf-lab">补记账用</span><select id="ihf-bf-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
           <label><span class="ihf-lab">压时间线用</span><select id="ihf-tl-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
           <label><input type="checkbox" id="ihf-tl-auto"> 压时间线用副 API 时,自动压</label>
+          <label><span class="ihf-lab">自动补旧账</span>补记账用副 API 时,每次生成后补 <input type="number" id="ihf-bf-auto" min="0" max="50"> 层(0 = 不自动)</label>
+          <div class="ihf-muted">几百层的老聊天一次补不完,从最近的往前一批一批补,几轮下来就补齐了。</div>
           <label><span class="ihf-lab">限速</span>每分钟最多 <input type="number" id="ihf-rpm" min="1" max="60"> 次</label>
+          <div id="ihf-sub-warn" class="ihf-error" style="display:none">⚠️ 副 API 和主线是同一个站。插件每轮会多打几次,免费站限并发,容易把主线一起打死。换一个站当副 API 更稳。</div>
           <button id="ihf-save2" class="ihf-btn ihf-primary">保存设置</button>
-          <div class="ihf-muted">设置存在 user/files/infinite-human-fate.config.json,不进 settings.json;你手填的 key 不会被改动。</div>
+          <div class="ihf-muted">设置存在 user/files/infinite-human-fate.config.json,不进 settings.json。</div>
+        </div>
+      </div>
+      <div class="ihf-card">
+        <h4>向量召回(嵌入 / 重排用哪个站)</h4>
+        <div class="ihf-form">
+          <div class="ihf-muted">嵌入站填好才有向量召回,不填也能用,只是退化成按专名找。重排那组可以空着。key 只存插件自己的文件。</div>
+          <b>嵌入(embedding)</b>
+          <label><span class="ihf-lab">地址</span><input type="text" id="ihf-embed-url" placeholder="https://api.siliconflow.cn/v1" style="flex:1"></label>
+          <label><span class="ihf-lab">key</span><input type="password" id="ihf-embed-key" autocomplete="off" style="flex:1"></label>
+          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-embed-model" list="ihf-embed-models" placeholder="BAAI/bge-m3" style="flex:1"><datalist id="ihf-embed-models"></datalist><button id="ihf-embed-fetch" class="ihf-btn">拉取模型</button></label>
+          <div id="ihf-embed-count" class="ihf-muted"></div>
+          <b>重排(rerank,可不填)</b>
+          <label><span class="ihf-lab">地址</span><input type="text" id="ihf-rerank-url" placeholder="空着就只按向量排" style="flex:1"></label>
+          <label><span class="ihf-lab">key</span><input type="password" id="ihf-rerank-key" autocomplete="off" placeholder="和嵌入同一个站可以不填" style="flex:1"></label>
+          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-rerank-model" list="ihf-rerank-models" placeholder="BAAI/bge-reranker-v2-m3" style="flex:1"><datalist id="ihf-rerank-models"></datalist><button id="ihf-rerank-fetch" class="ihf-btn">拉取模型</button></label>
+          <div id="ihf-rerank-count" class="ihf-muted"></div>
+          <label><span class="ihf-lab">怎么发</span><select id="ihf-via"><option value="auto">有转发插件就转发,没有就直连</option><option value="server">只走酒馆服务器转发</option><option value="direct">只浏览器直连</option></select></label>
+          <div id="ihf-relay-state" class="ihf-muted"></div>
+          <button id="ihf-save3" class="ihf-btn ihf-primary">保存设置</button>
         </div>
       </div>`,
 
@@ -1375,8 +1481,10 @@ const PAGE_HTML = {
         <div class="ihf-muted">
           1. ⚙️ 里勾上<b>开启插件</b>。<br>
           2. 挑一个<b>副 API</b>(补记账、压时间线、幕后推演都走它,省主 API 的额度和你的钱)。<br>
-          3. 想要向量召回的话,把硅基流动的 key 填进设置文件的 <code>siliconflow.key</code>。
-          不填也能用,只是召回退化成按专名找。<br>
+          3. 想要向量召回的话,在 ⚙️ 的「向量召回」里填嵌入站的地址和 key,点「拉取模型」选一个嵌入模型。
+          重排那组可以不填。不填也能用,只是召回退化成按专名找。<br>
+          　 想让公益站看到的是酒馆在发请求,把插件文件夹里的 <code>server-plugin</code> 拷成酒馆根目录的
+          <code>plugins/infinite-human-fate</code>,config.yaml 里 <code>enableServerPlugins: true</code>,重启酒馆服务。<br>
           4. 剩下的它自己会跑。哪儿不对就来这三页看,每个数旁边都写着是因为什么事加减的。
         </div>
       </div>
@@ -1409,7 +1517,10 @@ function mountPanel() {
     $('#ihf-backfill').on('click', () => startBackfill());
     $('#ihf-timeline').on('click', () => startTimeline());
     $('#ihf-stop').on('click', () => { state.jobs.stop = true; render(); });
-    $('#ihf-save, #ihf-save2').on('click', () => saveSettings());
+    $('#ihf-save, #ihf-save2, #ihf-save3').on('click', () => saveSettings());
+    $('#ihf-embed-fetch').on('click', () => onFetchModels('embed'));
+    $('#ihf-rerank-fetch').on('click', () => onFetchModels('rerank'));
+    $('#ihf-via').on('change', () => renderRelayState());
     $('#ihf-fate-ideas').on('click', () => startFateIdeas());
     $('#ihf-fate-survey').on('click', () => startFateSurvey());
     $('#ihf-fate-save').on('click', () => saveFateSettings());
@@ -1458,12 +1569,15 @@ function saveUiPatch(patch) {
 jQuery(async () => {
     console.info(LOG, `v${VERSION} 已加载`);
     mountPanel();
+    setHeaders(() => ctx().getRequestHeaders());
     try {
         state.config = await loadConfig();
     } catch (e) {
         setError('读设置文件失败,插件暂不工作', e);
         return;
     }
+    // 探一次服务端转发插件在不在,探完再填设置页(那一页要显示走的是哪条路)
+    await probeRelay();
     updateTier(false);
     fillSettings();
     ui.setBallVisible(state.config.ui?.ball !== false);

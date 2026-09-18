@@ -158,7 +158,7 @@ const CSS = `
   margin: 6px 0; font-size: .85em; flex-wrap: wrap;
 }
 .ihf-form label > span.ihf-lab { min-width: 5.5em; }
-.ihf-form select, .ihf-form input[type="number"], .ihf-form input[type="text"], .ihf-form textarea {
+.ihf-form select, .ihf-form input[type="number"], .ihf-form input[type="text"], .ihf-form input[type="password"], .ihf-form textarea {
   background: var(--ihf-input-bg); color: var(--ihf-text);
   border: 1px solid var(--ihf-border); border-radius: 7px;
   padding: 4px 7px; font-size: 1em; font-family: inherit;
