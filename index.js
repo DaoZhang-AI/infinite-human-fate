@@ -28,7 +28,7 @@ import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConf
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.10.1';
+const VERSION = '0.10.2';
 const LOG = '[模拟人生]';
 const TITLE = '模拟人生';
 
@@ -1159,13 +1159,19 @@ globalThis.ihf_interceptor = async function (chat, _contextSize, _abort, type) {
 async function checkUpdate() {
     if (state.config?.checkUpdate === false) return;
     try {
-        const res = await fetch('/api/extensions/version', {
-            method: 'POST',
-            headers: ctx().getRequestHeaders(),
-            // 端点自己会 sanitize,给光文件夹名就行,不要带 third-party/ 前缀
-            body: JSON.stringify({ extensionName: 'infinite-human-fate', global: false }),
-        });
-        if (!res.ok) return;
+        // 装在全局目录(public/scripts/extensions/third-party)还是用户目录不一定,两个都问,哪个找得到用哪个。
+        // 9/18 实测:只问用户目录的话,装在全局的永远回"Directory not found",有新版也亮不出 New!
+        let res = null;
+        for (const global of [true, false]) {
+            const r = await fetch('/api/extensions/version', {
+                method: 'POST',
+                headers: ctx().getRequestHeaders(),
+                // 端点自己会 sanitize,给光文件夹名就行,不要带 third-party/ 前缀
+                body: JSON.stringify({ extensionName: 'infinite-human-fate', global }),
+            });
+            if (r.ok) { res = r; break; }
+        }
+        if (!res) return;
         const d = await res.json();
         if (!d.currentCommitHash || d.isUpToDate) return;
         $('#ihf-new').prop('hidden', false);
