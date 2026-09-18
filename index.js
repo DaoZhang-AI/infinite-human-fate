@@ -22,13 +22,13 @@ import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages,
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
 import { mountShell } from './ui.js';
-import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
+import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, scheduleIdeaDue, pickDueIdea, makeDuePending, buildTriggerPrompt, settleTriggered, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.9.7';
+const VERSION = '0.9.8';
 const LOG = '[无限人类命运]';
 const TITLE = '无限人类命运';
 
@@ -176,6 +176,7 @@ function refresh(forceSave = false) {
     if (state.config.fate?.enabled !== false && state.memory.fate) ensureThreads();
     settleFate();
     checkWorldDue();
+    checkNpcDue();
     render();
     ensureVectors();
 }
@@ -591,6 +592,17 @@ function ensureThreads() {
         fate.ideasVer = 2;
         added++;
     }
+    // v0.9.8 起 NPC 念头改成「介入时机 / 介入后会做 / 等不到时」,老格式的清掉一次重立(世界栏不动,爆过的留着)
+    if (fate.ideasVer < 3) {
+        for (const t of Object.values(fate.threads)) {
+            if (t.kind !== 'npc') continue;
+            t.ideas = (t.ideas ?? []).filter(it => Number.isFinite(it.surfacedAt));
+            t.ideasAsked = false;
+        }
+        if (fate.pending && fate.pending.kind !== 'world') fate.pending = null;
+        fate.ideasVer = 3;
+        added++;
+    }
     // 旧版把卡主也开了栏,删掉(连同它的念头和排队中的浮出)
     for (const n of cardOwners()) {
         if (fate.threads[n]?.kind === 'npc') {
@@ -679,12 +691,8 @@ async function startFateSurvey(which = null) {
         if (t.kind !== 'common' && got.now) t.now = got.now;
         pushLog(t, day, got.log, cfg.logMax ?? 30);
         t.at = Date.now();
-        // 踩中触发情形才排队浮出,而且一次只准一条、离上次要够远
-        const idea = got.act ? t.ideas[got.act - 1] : null;
-        if (idea && canSurface(idea) && canSurfaceNow(fate, cfg, floor)) {
-            fate.pending = makePending(t, got.act - 1, floor);
-            console.info(LOG, '幕后浮出排队:', fate.pending.what);
-        }
+        // 9/18 起推演只写日常和此刻,不再替 NPC 判断介入时机:
+        // 场面在正文里,由主线模型照条件句自己看;场面等不到,由插件数层数到点进场
         scheduleSave();
     });
     fate.lastRunFloor = floor;
@@ -727,12 +735,37 @@ function checkWorldDue() {
     if (dirty) scheduleSave();
 }
 
+/** NPC:介入时机的场面一直不来,到最晚层数就自己造机会进场(道长 9/18:比如一直不回家,就打电话催) */
+function checkNpcDue() {
+    const fate = state.memory?.fate;
+    const cfg = state.config?.fate;
+    if (!fate || cfg?.enabled === false || !state.view) return;
+    const floor = state.view.rows.length;
+    let dirty = false;
+    for (const t of Object.values(fate.threads ?? {})) {
+        if (scheduleIdeaDue(t, floor, cfg)) dirty = true;
+    }
+    const due = pickDueIdea(fate, floor, cfg);
+    if (due) {
+        fate.pending = makeDuePending(due.thread, due.idx, floor);
+        console.info(LOG, '等不到场面,到点自己进场:', fate.pending.what);
+        dirty = true;
+    }
+    if (dirty) scheduleSave();
+}
+
 /** 每层收尾:模型写了幕后✓ 就结案,连挂几层没写就撤回水下 */
 function settleFate() {
     const fate = state.memory?.fate;
-    if (!fate?.pending || !state.view) return;
+    if (!fate || !state.view) return;
     const floor = state.view.rows.length;
     const done = (state.view.rows ?? []).slice(-3).flatMap(r => r.record?.fateDone ?? []);
+    // 条件句触发的:场面来了、他照做了,模型记了「幕后✓: 名字 编号」
+    if (settleTriggered(fate, floor, done)) {
+        console.info(LOG, '有人照介入时机进了剧情');
+        scheduleSave();
+    }
+    if (!fate.pending) return;
     const what = fate.pending.what;
     const wasWorld = fate.pending.kind === 'world';
     const res = settlePending(fate, state.config.fate, floor, done);
@@ -966,7 +999,7 @@ async function planRun(core) {
             // 好感度关着的时候 affinity 恒为 0,梯子得换条绳子爬(道长)
             useAffinity: pcfg.modules?.affinity !== false,
         };
-        anchor = [anchor, buildNowPrompt(fate, fcfg), buildActsPrompt(fate, here, fcfg, actsCtx), buildSurfacePrompt(fate.pending)]
+        anchor = [anchor, buildNowPrompt(fate, fcfg), buildActsPrompt(fate, here, fcfg, actsCtx), buildTriggerPrompt(fate, fcfg), buildSurfacePrompt(fate.pending)]
             .filter(Boolean).join('\n\n');
     }
     if (!zones.summary.length && !zones.older.length) return { tierName, block: null, status, anchor };
@@ -1179,6 +1212,8 @@ async function saveFateSettings() {
                 surfaceGap: num('#ihf-fate-gap', 1, 99, 12),
                 maxNpc: num('#ihf-fate-npc', 1, 8, 4),
                 worldCount: num('#ihf-fate-world-n', 1, 8, 3),
+                npcDueMin: num('#ihf-fate-npc-min', 3, 300, 20),
+                npcDueMax: Math.max(num('#ihf-fate-npc-min', 3, 300, 20), num('#ihf-fate-npc-max', 3, 400, 50)),
                 worldDueMin: num('#ihf-fate-due-min', 3, 200, 15),
                 worldDueMax: Math.max(num('#ihf-fate-due-min', 3, 200, 15), num('#ihf-fate-due-max', 3, 300, 40)),
             },
@@ -1213,6 +1248,7 @@ function renderFate() {
     out.push(`<div class="ihf-muted">上次幕后推演:${fate.lastRunFloor < 0 ? '还没跑过' : '第 ' + fate.lastRunFloor + ' 层'} · 上次浮出:${fate.lastSurfaceFloor < 0 ? '还没有' : '第 ' + fate.lastSurfaceFloor + ' 层'}</div>`);
     const tiers = state.config.people.affinityTiers ?? [];
     const useAff = state.config.people.modules?.affinity !== false;
+    const meName = ctx().name1 || '你';
     for (const t of list) {
         const kind = t.kind === 'world' ? '世界大势' : t.kind === 'common' ? '多方交汇' : 'NPC';
         const redo = t.kind === 'common' ? '' : `<button class="ihf-btn ihf-fate-redo" data-name="${escapeHtml(t.name)}" title="清掉这一栏的念头,重新让模型定">这栏重来</button>`;
@@ -1228,7 +1264,7 @@ function renderFate() {
         t.ideas?.forEach((it, i) => {
             const tag = it.state !== '进行中' ? `<span class="ihf-chip">${escapeHtml(it.state)}</span>` : '';
             const isWorld = t.kind === 'world';
-            const idea = [`<div class="ihf-idea-title">${isWorld ? '大事' : '心事'} ${i + 1}:${escapeHtml(it.text)}${tag}</div>`];
+            const idea = [`<div class="ihf-idea-title">${isWorld ? '大事' : '念头'} ${i + 1}:${escapeHtml(it.text)}${tag}</div>`];
             if (isWorld) {
                 const when = Number.isFinite(it.surfacedAt) ? `已经爆出来了(第 ${it.surfacedAt} 层)`
                     : fate.pending?.kind === 'world' && fate.pending.ideaIdx === i ? '轮到它了,这一两层会写进正文'
@@ -1236,9 +1272,21 @@ function renderFate() {
                 idea.push(kv('状态', escapeHtml(when)));
                 if (it.actWhen) idea.push(kv('怎么捅出来', escapeHtml(it.actWhen)));
             } else {
-                idea.push(kv('什么时候会做', escapeHtml(it.actWhen || '没写,这条只在背后影响,不会浮到正文')));
+                // 道长 9/18:她要看的是"他们什么时候会介入剧情"
+                const floorNow = state.view?.rows?.length ?? 0;
+                const isPending = fate.pending?.name === t.name && fate.pending.ideaIdx === i;
+                idea.push(kv('介入时机', escapeHtml(it.actWhen || '没写')));
+                if (it.onTrigger) idea.push(kv('介入后会做', escapeHtml(it.onTrigger)));
+                if (it.fallback) idea.push(kv('等不到时', escapeHtml(it.fallback)));
+                const late = Number.isFinite(it.surfacedAt) ? `已经进过剧情了(第 ${it.surfacedAt} 层)`
+                    : isPending ? '到点了,这一两层他会自己找上来'
+                        : !it.fallback ? '没写等不到时怎么办,只能等场面自己来'
+                            : !Number.isFinite(it.dueFloor) ? '下一层排上'
+                                : it.dueFloor > floorNow ? `场面再不来,还有 ${it.dueFloor - floorNow} 层他就自己找上来(第 ${it.dueFloor} 层)`
+                                    : '到点了,等前一件浮出的事写完就轮到他';
+                idea.push(kv('最晚', escapeHtml(late)));
             }
-            if (it.acts?.length) idea.push(kv('碰上主角时', `<ul class="ihf-list">${it.acts.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`));
+            if (it.acts?.length) idea.push(kv(`碰上${escapeHtml(meName)}时`, `<ul class="ihf-list">${it.acts.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`));
             const steps = limitSteps(it, tiers);
             if (steps.length) {
                 const now = currentLimit(it, {
@@ -1250,7 +1298,7 @@ function renderFate() {
                 const note = useAff ? '' : `<div class="ihf-muted">好感度关着,改按同场层数往上爬:现在 ${coPresence(state.view?.rows, t.name)} 层,每 ${state.config.fate.stepEveryFloors ?? 15} 层升一档</div>`;
                 idea.push(kv('分寸', `<ul class="ihf-list">${ladder}</ul>${note}`));
             } else if (t.kind !== 'world') {
-                idea.push(kv('分寸', '<span class="ihf-muted">没写,所以这条碰上主角时怎么做不会发给模型</span>'));
+                idea.push(kv('分寸', `<span class="ihf-muted">没写,所以碰上${escapeHtml(meName)}时怎么做不会发给模型</span>`));
             }
             if (it.inPublic) idea.push(kv('有旁人在时', escapeHtml(it.inPublic)));
             card.push(`<div class="ihf-idea">${idea.join('')}</div>`);
@@ -1268,7 +1316,10 @@ function renderFate() {
         out.push(`<div class="ihf-error">提前剧透提醒:【${escapeHtml(k.name)}】心里有件事,本来要等「${escapeHtml(k.actWhen)}」这种时候才会做,`
             + `可最新这层正文里好像已经写出来了。如果真是模型提前写了,可以重 roll 这一层;只是用词碰巧像,就不用管。</div>`);
     }
-    el.innerHTML = out.join('');
+    // 念头里模型可能写了 {{user}},显示时换成她的名字(道长 9/18:{{user}} 一定指用户扮演的人)
+    let html = out.join('');
+    try { html = ctx().substituteParams(html); } catch { /* 换不了就原样显示 */ }
+    el.innerHTML = html;
 }
 
 /** 人物明细:好感、性格弧、情绪、约定账。这是道长的那道闸,模型写歪了要在这儿看得见 */
@@ -1597,6 +1648,8 @@ function fillSettings() {
     $('#ihf-fate-gap').val(cfg.fate.surfaceGap);
     $('#ihf-fate-npc').val(cfg.fate.maxNpc);
     $('#ihf-fate-world-n').val(cfg.fate.worldCount ?? 3);
+    $('#ihf-fate-npc-min').val(cfg.fate.npcDueMin ?? 20);
+    $('#ihf-fate-npc-max').val(cfg.fate.npcDueMax ?? 50);
     $('#ihf-fate-due-min').val(cfg.fate.worldDueMin ?? 15);
     $('#ihf-fate-due-max').val(cfg.fate.worldDueMax ?? 40);
     $('#ihf-never').val((cfg.people.itemNever ?? []).join('、'));
@@ -1740,6 +1793,7 @@ const PAGE_HTML = {
           <label><span class="ihf-lab">开栏上限</span>最多 <input type="number" id="ihf-fate-npc" min="1" max="8"> 个人</label>
           <label><span class="ihf-lab">世界大事</span>同时酝酿 <input type="number" id="ihf-fate-world-n" min="1" max="8"> 件,每隔 <input type="number" id="ihf-fate-due-min" min="3" max="200"> 到 <input type="number" id="ihf-fate-due-max" min="3" max="300"> 层必然爆出来一件</label>
           <div class="ihf-muted">一次只爆一件,从正在酝酿的里随机挑;爆掉一件就补一件新的。间隔要比下面的「浮出间隔」长,不然会被它卡住。</div>
+          <label><span class="ihf-lab">NPC 介入</span>场面一直不来,最晚 <input type="number" id="ihf-fate-npc-min" min="3" max="300"> 到 <input type="number" id="ihf-fate-npc-max" min="3" max="400"> 层他就自己找上来</label>
           <button id="ihf-fate-save" class="ihf-btn ihf-primary">保存</button>
           <div class="ihf-muted">念头原文只存在这儿,永远不发给模型。发出去的只有「在场时会」和当前那一档的「界」。</div>
         </div>

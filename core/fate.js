@@ -44,6 +44,9 @@ export const DEFAULT_FATE = {
      *  不然它就只是一个好看的挂在插件里的东西。" 又说"大事件可以同时有多个,让用户自己填数字,
      *  但是每次触发的只有一个"。世界大事的触发情形都在幕后,正文里永远等不到,所以节奏由插件数层数定。 */
     worldCount: 3,
+    /** NPC 念头:介入时机的场面一直不来,最晚在这个层数范围里(随机)自己造机会进场(道长 9/18) */
+    npcDueMin: 20,
+    npcDueMax: 50,
     worldDueMin: 15,
     worldDueMax: 40,
     /** 要不要单开一栏「世界」记背景板大事(某产品爆火、AI 横空出世)。
@@ -64,7 +67,7 @@ export const COMMON = '共同';
 export const WORLD = '世界';
 
 export function emptyFate() {
-    return { threads: {}, lastRunFloor: -1, lastRunDay: -1, lastSurfaceFloor: -9999, pending: null, ideasVer: 2 };
+    return { threads: {}, lastRunFloor: -1, lastRunDay: -1, lastSurfaceFloor: -9999, pending: null, ideasVer: 3 };
 }
 
 export function emptyThread(name, kind = 'npc') {
@@ -365,4 +368,100 @@ export function leakCheck(fate, text, min = 8, baseline = '', margin = 4) {
         });
     }
     return hits;
+}
+
+/* ---------------- NPC 介入剧情(道长 9/18) ----------------
+ * 她要的是"他们什么时候会介入剧情":
+ *   介入时机 = 正文里会出现的一个场面(比如 Char1 回家吃饭),场面来了他就照「介入后会做」进场;
+ *   场面一直不来,到「最晚第几层」他就自己造机会,照「等不到时」进场(比如打电话催 Char1 回家)。
+ * 场面来没来由主线模型自己判断(条件句每层发给它),到点必然介入由插件数层数。
+ */
+
+/** 给 NPC 还没排期的念头排「最晚第几层」:从 floor 往后 [npcDueMin, npcDueMax] 里随机 */
+export function scheduleIdeaDue(thread, floor, cfg = {}, rand = Math.random) {
+    if (thread?.kind !== 'npc') return 0;
+    const lo = Math.max(1, Number(cfg.npcDueMin) || 20);
+    const hi = Math.max(lo, Number(cfg.npcDueMax) || 50);
+    let n = 0;
+    for (const it of thread.ideas ?? []) {
+        if (it.state !== '进行中' || !it.fallback || Number.isFinite(it.dueFloor)) continue;
+        it.dueFloor = floor + lo + Math.floor(rand() * (hi - lo + 1));
+        n++;
+    }
+    return n;
+}
+
+/** 到了最晚层数、该自己造机会进场的那一条(最早到期的),没有返回 null */
+export function pickDueIdea(fate, floor, cfg = {}) {
+    if (!canSurfaceNow(fate, cfg, floor)) return null;
+    let best = null;
+    for (const t of Object.values(fate.threads ?? {})) {
+        if (t.kind !== 'npc') continue;
+        (t.ideas ?? []).forEach((it, i) => {
+            if (it.state !== '进行中' || !it.fallback || !Number.isFinite(it.dueFloor) || it.dueFloor > floor) return;
+            if (!best || it.dueFloor < best.idea.dueFloor) best = { thread: t, idx: i, idea: it };
+        });
+    }
+    return best;
+}
+
+/** 等不到场面、到点自己进场:写成命令句挂上去 */
+export function makeDuePending(thread, ideaIdx, floor) {
+    const idea = thread?.ideas?.[ideaIdx];
+    if (!idea?.fallback) return null;
+    return {
+        name: thread.name,
+        kind: 'due',
+        ideaIdx,
+        what: `${thread.name}:${idea.fallback}`,
+        why: `一直在等「${idea.actWhen || '一个机会'}」,等不到了,自己找上来`,
+        also: otherWants(thread, ideaIdx),
+        sinceFloor: floor,
+        tries: 0,
+    };
+}
+
+/**
+ * [如果这些场面出现了]:每层发给主线的条件句。场面来了才照写,别为了触发去安排它。
+ * 念头原文不出门(道长 9/12 定的),只发场面和他会做的事。
+ */
+export function buildTriggerPrompt(fate, cfg = {}) {
+    const lines = [];
+    for (const t of Object.values(fate.threads ?? {})) {
+        if (t.kind !== 'npc') continue;
+        (t.ideas ?? []).forEach((it, i) => {
+            if (it.state !== '进行中' || !it.actWhen || !it.onTrigger) return;
+            if (fate.pending?.name === t.name && fate.pending.ideaIdx === i) return;
+            lines.push(`- 正文里出现「${it.actWhen}」时,${t.name}会:${it.onTrigger}(写了就在记账块里记:幕后✓: ${t.name} ${i + 1})`);
+        });
+    }
+    if (!lines.length) return '';
+    return [
+        '[如果这些场面出现了]',
+        '下面这些人各自在等一个场面。只有正文里自然出现了那个场面,才照写他的反应;别为了让他出场去硬安排这个场面。',
+        ...lines,
+    ].join('\n');
+}
+
+/**
+ * 记账里的「幕后✓: 名字 编号」→ 把那条念头结案(场面来了、他照做了)。
+ * 挂着的那件由 settlePending 管,这里只管条件句触发的。
+ * @returns {number} 结了几条
+ */
+export function settleTriggered(fate, floor, doneLines = []) {
+    let n = 0;
+    for (const raw of doneLines) {
+        const s = String(raw ?? '').trim();
+        const m = s.match(/^(.+?)\s*[#＃]?\s*([1-9])\s*$/);
+        if (!m) continue;
+        const t = fate.threads?.[m[1].trim()];
+        const it = t?.ideas?.[Number(m[2]) - 1];
+        if (!t || t.kind !== 'npc' || !it || it.state !== '进行中') continue;
+        if (fate.pending?.name === t.name && fate.pending.ideaIdx === Number(m[2]) - 1) continue;
+        it.state = '了了';
+        it.surfacedAt = floor;
+        fate.lastSurfaceFloor = floor;
+        n++;
+    }
+    return n;
 }
