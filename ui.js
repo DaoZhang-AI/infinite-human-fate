@@ -27,7 +27,7 @@ export const PAGES = [
 const CSS = `
 /* ── 悬浮球 ── */
 #ihf-ball {
-  position: fixed; right: 12px; top: 40%;
+  position: fixed; right: 12px; top: 40vh;
   z-index: 9998;
   width: 38px; height: 38px;
   display: flex; align-items: center; justify-content: center;
@@ -55,7 +55,10 @@ const CSS = `
 
 /* ── 遮罩与面板 ── */
 #ihf-overlay {
-  position: fixed; inset: 0; z-index: 99998;
+  /* 酒馆 html 带 transform 时 fixed 的 inset/百分比会塌成 0(iPad 飞顶),一律用视口单位 */
+  position: fixed; top: 0; left: 0; z-index: 99998;
+  width: 100vw; height: 100vh; height: 100dvh;
+  display: flex; overflow-y: auto; box-sizing: border-box; padding: 12px 0;
   background: rgba(0,0,0,.55);
   opacity: 0; pointer-events: none; transition: opacity .25s ease;
 }
@@ -69,16 +72,16 @@ const CSS = `
   --ihf-border: rgba(140,130,200,.2);
   --ihf-accent: #a78bfa;
   --ihf-input-bg: rgba(0,0,0,.3);
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%,-50%) scale(.95);
+  position: relative; margin: auto;
+  transform: scale(.95);
   transition: transform .2s;
-  width: 92%; max-width: 560px; max-height: 88vh;
+  width: 92vw; max-width: 560px; max-height: 88vh; max-height: 88dvh;
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--ihf-bg); color: var(--ihf-text);
   border: 1px solid var(--ihf-border); border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0,0,0,.5);
 }
-#ihf-overlay.ihf-visible #ihf-panel { transform: translate(-50%,-50%) scale(1); }
+#ihf-overlay.ihf-visible #ihf-panel { transform: scale(1); }
 #ihf-panel.ihf-day {
   --ihf-bg: #f0e6d2;
   --ihf-bg2: rgba(120,90,50,.08);

@@ -21,14 +21,14 @@ import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVe
 import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateWorldMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js';
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
-import { mountShell } from './ui.js';
+import { mountShell } from './ui.js?v=0.10.3';
 import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, scheduleIdeaDue, pickDueIdea, makeDuePending, buildTriggerPrompt, settleTriggered, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.10.2';
+const VERSION = '0.10.3';
 const LOG = '[模拟人生]';
 const TITLE = '模拟人生';
 
