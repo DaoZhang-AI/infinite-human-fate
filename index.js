@@ -21,14 +21,14 @@ import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVe
 import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateWorldMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js';
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
-import { mountShell } from './ui.js?v=0.11.0';
+import { mountShell } from './ui.js?v=0.11.1';
 import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, scheduleIdeaDue, pickDueIdea, makeDuePending, buildTriggerPrompt, settleTriggered, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.11.0';
+const VERSION = '0.11.1';
 const LOG = '[模拟人生]';
 const TITLE = '模拟人生';
 
@@ -1341,7 +1341,14 @@ function renderFate() {
             card.push(kv('下一件', escapeHtml(left > 0 ? `还有 ${left} 层,从下面随机挑一件爆出来` : '到点了,等前一件浮出的事写完就轮到')));
         }
         if (!t.ideas?.length && t.kind !== 'common') {
-            card.push(`<div class="ihf-muted">${t.ideasAsked ? '问过了,材料里看不出这一栏惦记什么' : '还没定念头,开局会自动定'}</div>`);
+            // 没念头有两种原因,得分得开(道长 9/23:npc 的念头没生成,但面板上看不出是为什么):
+            // 问过了没问出来,还是压根没问成(副 API 挂了、没额度、没选连接)
+            const why = t.ideasAsked
+                ? '问过了,材料里看不出这一栏惦记什么'
+                : state.jobs?.error
+                    ? `还没定念头。上次没问成:${escapeHtml(state.jobs.error)}(多半是这条连接没额度或者在挂,换个连接再点「这栏重来」)`
+                    : '还没定念头,开局会自动定';
+            card.push(`<div class="ihf-muted">${why}</div>`);
         }
         t.ideas?.forEach((it, i) => {
             const tag = it.state !== '进行中' ? `<span class="ihf-chip">${escapeHtml(it.state)}</span>` : '';
