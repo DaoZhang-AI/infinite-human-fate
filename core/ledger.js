@@ -24,6 +24,7 @@ const LEDGER_LINES = {
     always: [
         '摘要: 本层发生了什么,100 字左右,流水账体:谁对谁做了什么,状态怎么变了。只写原文里有的,不补不猜。',
         '专名: 本层出现的人名、地名、物品、组织、作品名、事件名,逗号分隔。不写动作词、氛围词、情绪词。没有正式名字的东西,用原文里最认得出它的叫法(比如歌用首句)。',
+        '在场: 这一层真的在场景里的人,逗号分隔。当面、打电话、视频都算在场。只被提起、只在回忆或转述里出现的人不写。一个人独处就只写他自己。',
         '时间: 本层相对上一层过了多久,只选一种写法:同日 / +1夜 / +3天 / 跳至 4月5日',
     ],
     promise: [
@@ -97,7 +98,7 @@ export function stripLedger(mes) {
         .trimEnd();
 }
 
-const KEYS = ['摘要', '专名', '时间', '约定+', '约定✓', '好感', '性格', '情绪', '破锚', '物品', '幕后✓'];
+const KEYS = ['摘要', '专名', '在场', '时间', '约定+', '约定✓', '好感', '性格', '情绪', '破锚', '物品', '幕后✓'];
 const KEY_RE = new RegExp('^\\s*(' + KEYS.map(k => k.replace(/[+✓]/g, '\\$&')).join('|') + ')\\s*[:：]\\s*(.*)$');
 
 /** 行首那个人名:去掉标点和"角色"这类占位词。认不出返回空串 */
@@ -207,7 +208,7 @@ export function splitNames(s) {
  */
 export function parseLedger(inner) {
     if (inner == null) return null;
-    const fields = { 摘要: [], 专名: [], 时间: [], '约定+': [], '约定✓': [], 好感: [], 性格: [], 情绪: [], 破锚: [], 物品: [], '幕后✓': [] };
+    const fields = { 摘要: [], 专名: [], 在场: [], 时间: [], '约定+': [], '约定✓': [], 好感: [], 性格: [], 情绪: [], 破锚: [], 物品: [], '幕后✓': [] };
     let cur = null;
     for (const line of String(inner).split('\n')) {
         const m = line.match(KEY_RE);
@@ -222,6 +223,9 @@ export function parseLedger(inner) {
     const result = {
         summary,
         names: splitNames(fields.专名.join(',')),
+        // 在场是「谁真的在这一层的场景里」,和专名分开:专名含地名、物品、只被提到的人(9/23 修
+        // 「命运里未在场的 NPC 不显示」,病根是拿专名当在场,提一嘴女友就把她算成在场)
+        present: splitNames(fields.在场.join(',')),
         timeRaw: (fields.时间[0] ?? '').trim(),
         promisesMade: fields['约定+'].filter(Boolean),
         promisesSettled: fields['约定✓'].filter(Boolean),
@@ -232,7 +236,7 @@ export function parseLedger(inner) {
         items: fields.物品.map(parseItemLine).filter(Boolean),
         fateDone: fields['幕后✓'].map(l => String(l).replace(/[｜|]/g, ' ').replace(/已发生[。.]?$/, '').trim()).filter(Boolean),
     };
-    const any = summary || result.names.length || result.timeRaw || result.promisesMade.length
+    const any = summary || result.names.length || result.present.length || result.timeRaw || result.promisesMade.length
         || result.promisesSettled.length || result.traits.length || result.affinity.length
         || result.emotions.length || result.breaks.length || result.items.length || result.fateDone.length;
     return any ? result : null;

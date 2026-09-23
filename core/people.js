@@ -467,6 +467,13 @@ export function presentNames(rows, n) {
         seen++;
         const rec = r.record;
         if (!rec) continue;
+        // 这一层写了「在场」就只认它。专名是给召回用的,地名物品和只被提一嘴的人都在里面,
+        // 拿它当在场会把人错算成在场:Char1 一个人开车,正文里提了一句 Char2,Char2 就被算成在场,
+        // 于是 Char2 从命运页消失。老楼没有这一行,退回专名那套,别让旧聊天一夜之间全变空场。
+        if (rec.present?.length) {
+            for (const x of rec.present) out.add(x);
+            continue;
+        }
         for (const x of rec.names ?? []) out.add(x);
         for (const x of rec.affinity ?? []) out.add(x.name);
         for (const x of rec.traits ?? []) out.add(x.name);

@@ -21,14 +21,14 @@ import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVe
 import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateWorldMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js';
 import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js';
 import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js';
-import { mountShell } from './ui.js?v=0.10.3';
+import { mountShell } from './ui.js?v=0.11.0';
 import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, scheduleIdeaDue, pickDueIdea, makeDuePending, buildTriggerPrompt, settleTriggered, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js';
 import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js';
 import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.10.3';
+const VERSION = '0.11.0';
 const LOG = '[模拟人生]';
 const TITLE = '模拟人生';
 
@@ -1511,7 +1511,11 @@ function readEndpointForm(k) {
 /** 模型下拉:datalist 既能从拉回来的列表里挑,也能手填(有的站不给列表) */
 function fillModelList(k, models, current) {
     const list = [...new Set([...(models ?? []), current].filter(Boolean))];
-    $(`#ihf-${k}-models`).html(list.map(m => `<option value="${escapeHtml(m)}">`).join(''));
+    // 原来用 <datalist>,iOS 上它只在输入法上方挤出一两条,iPad 等于挑不了
+    // (道长 9/23:「所有拉取模型在 iPad 上都无法拉取」)。换成原生 <select>,iOS 会弹整页滚轮。
+    const $pick = $(`#ihf-${k}-pick`);
+    $pick.html(['<option value="">从列表里挑…</option>', ...list.map(m => `<option value="${escapeHtml(m)}"${m === current ? ' selected' : ''}>${escapeHtml(m)}</option>`)].join(''));
+    $pick.toggle(list.length > 0);
     $(`#ihf-${k}-count`).text(models?.length ? `列表里有 ${models.length} 个,也可以直接手填` : '还没拉过列表,可以直接手填模型名');
 }
 
@@ -1912,7 +1916,7 @@ const PAGE_HTML = {
         <div class="ihf-form">
           <label><span class="ihf-lab">用哪个</span><select id="ihf-sub"></select></label>
           <div class="ihf-muted">从 API 管理器或酒馆的连接配置里选。请求经酒馆服务器发出、用酒馆密钥库里的 key,插件不碰也不存 key。</div>
-          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-sub-model" list="ihf-sub-models" placeholder="空着 = 用这条连接自己带的模型" style="flex:1"><datalist id="ihf-sub-models"></datalist><button id="ihf-sub-fetch" class="ihf-btn">拉取模型</button></label>
+          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-sub-model"  placeholder="空着 = 用这条连接自己带的模型" style="flex:1"><select id="ihf-sub-pick" class="ihf-modelpick" title="从拉到的列表里挑一个"></select><button id="ihf-sub-fetch" class="ihf-btn">拉取模型</button></label>
           <div id="ihf-sub-count" class="ihf-muted"></div>
           <label><span class="ihf-lab">补记账用</span><select id="ihf-bf-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
           <label><span class="ihf-lab">压时间线用</span><select id="ihf-tl-backend"><option value="main">主 API</option><option value="sub">副 API</option></select></label>
@@ -1932,12 +1936,12 @@ const PAGE_HTML = {
           <b>嵌入(embedding)</b>
           <label><span class="ihf-lab">地址</span><input type="text" id="ihf-embed-url" placeholder="https://api.siliconflow.cn/v1" style="flex:1"></label>
           <label><span class="ihf-lab">key</span><input type="password" id="ihf-embed-key" autocomplete="off" style="flex:1"></label>
-          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-embed-model" list="ihf-embed-models" placeholder="BAAI/bge-m3" style="flex:1"><datalist id="ihf-embed-models"></datalist><button id="ihf-embed-fetch" class="ihf-btn">拉取模型</button></label>
+          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-embed-model"  placeholder="BAAI/bge-m3" style="flex:1"><select id="ihf-embed-pick" class="ihf-modelpick" title="从拉到的列表里挑一个"></select><button id="ihf-embed-fetch" class="ihf-btn">拉取模型</button></label>
           <div id="ihf-embed-count" class="ihf-muted"></div>
           <b>重排(rerank,可不填)</b>
           <label><span class="ihf-lab">地址</span><input type="text" id="ihf-rerank-url" placeholder="空着就只按向量排" style="flex:1"></label>
           <label><span class="ihf-lab">key</span><input type="password" id="ihf-rerank-key" autocomplete="off" placeholder="和嵌入同一个站可以不填" style="flex:1"></label>
-          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-rerank-model" list="ihf-rerank-models" placeholder="BAAI/bge-reranker-v2-m3" style="flex:1"><datalist id="ihf-rerank-models"></datalist><button id="ihf-rerank-fetch" class="ihf-btn">拉取模型</button></label>
+          <label><span class="ihf-lab">模型</span><input type="text" id="ihf-rerank-model"  placeholder="BAAI/bge-reranker-v2-m3" style="flex:1"><select id="ihf-rerank-pick" class="ihf-modelpick" title="从拉到的列表里挑一个"></select><button id="ihf-rerank-fetch" class="ihf-btn">拉取模型</button></label>
           <div id="ihf-rerank-count" class="ihf-muted"></div>
           <label><span class="ihf-lab">怎么发</span><select id="ihf-via"><option value="auto">有转发插件就转发,没有就直连</option><option value="server">只走酒馆服务器转发</option><option value="direct">只浏览器直连</option></select></label>
           <div id="ihf-relay-state" class="ihf-muted"></div>
@@ -2004,6 +2008,11 @@ function mountPanel() {
     $('#ihf-import').on('click', () => $('#ihf-import-file').val('').trigger('click'));
     $('#ihf-import-file').on('change', function () { importMemory(this.files?.[0]); });
     $('#ihf-sub').on('change', () => fillSubModel($('#ihf-sub').val()));
+    // 下拉里挑一个就填进旁边那个输入框,手填的照旧能用
+    $('#ihf-sub-pick, #ihf-embed-pick, #ihf-rerank-pick').on('change', function () {
+        const v = String($(this).val() ?? '');
+        if (v) $('#' + this.id.replace(/-pick$/, '-model')).val(v).trigger('change');
+    });
     $('#ihf-sub-fetch').on('click', () => onFetchSubModels());
     $('#ihf-embed-fetch').on('click', () => onFetchModels('embed'));
     $('#ihf-rerank-fetch').on('click', () => onFetchModels('rerank'));

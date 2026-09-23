@@ -13,8 +13,9 @@
  */
 
 export const TABS = [
-    { key: 'wuxian', icon: '♾️', name: '无限', hint: '摘要 · 时间线 · 召回' },
+    // 道长 9/23:人类和无限对调。人类是她每层都看的,排第一页,面板打开就停在这儿
     { key: 'renlei', icon: '👥', name: '人类', hint: '好感 · 性格弧 · 情绪 · 约定 · 物品' },
+    { key: 'wuxian', icon: '♾️', name: '无限', hint: '摘要 · 时间线 · 召回' },
     { key: 'mingyun', icon: '🎲', name: '命运', hint: 'NPC 与世界的幕后' },
 ];
 
