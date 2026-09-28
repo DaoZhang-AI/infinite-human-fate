@@ -10,11 +10,11 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { fingerprint } from './fingerprint.js';
-import { extractLedger, parseLedger, parseLegacyMatrix } from './ledger.js';
-import { dayToDate, detectStartDate, parseDelta } from './calendar.js';
-import { DEFAULT_PEOPLE, foldPeople } from './people.js';
-import { emptyFate } from './fate.js';
+import { fingerprint } from './fingerprint.js?v=0.12.0';
+import { extractLedger, parseLedger, parseLegacyMatrix } from './ledger.js?v=0.12.0';
+import { dayToDate, detectStartDate, parseDelta } from './calendar.js?v=0.12.0';
+import { DEFAULT_PEOPLE, foldPeople } from './people.js?v=0.12.0';
+import { emptyFate } from './fate.js?v=0.12.0';
 
 export const MEMORY_FORMAT = 1;
 
@@ -48,6 +48,8 @@ export function recordFromLedgerText(text, source = 'backfill') {
         source,
         summary: ledger.summary,
         names: ledger.names,
+        ...(Array.isArray(ledger.present) ? { present: [...ledger.present] } : {}),
+        thoughtResults: ledger.thoughtResults,
         timeRaw: ledger.timeRaw,
         abs: null,
         promisesMade: ledger.promisesMade,
@@ -70,6 +72,8 @@ export function recordFromMessage(mes) {
             source: 'ledger',
             summary: ledger.summary,
             names: ledger.names,
+            ...(Array.isArray(ledger.present) ? { present: [...ledger.present] } : {}),
+            thoughtResults: ledger.thoughtResults,
             timeRaw: ledger.timeRaw,
             abs: null,
             promisesMade: ledger.promisesMade,
@@ -114,6 +118,20 @@ export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE) {
         const isUser = !!m.is_user;
         const fp = fingerprint(m.mes, isUser);
         let rec = memory.floors[fp] ?? null;
+        // Repair cached v0.11 records from their own ledger, without a model call or replacing vectors.
+        if (rec && !isUser && (!Object.hasOwn(rec, 'present') || !Object.hasOwn(rec, 'thoughtResults'))) {
+            const ledger = parseLedger(extractLedger(m.mes));
+            let repaired = false;
+            if (!Object.hasOwn(rec, 'present') && Array.isArray(ledger?.present)) {
+                rec.present = [...ledger.present];
+                repaired = true;
+            }
+            if (!Object.hasOwn(rec, 'thoughtResults') && ledger?.thoughtResults?.length) {
+                rec.thoughtResults = ledger.thoughtResults;
+                repaired = true;
+            }
+            if (repaired) { rec.at = Date.now(); added++; }
+        }
         if (!rec && !isUser) {
             rec = recordFromMessage(m.mes);
             if (rec) {

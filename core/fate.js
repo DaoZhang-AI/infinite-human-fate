@@ -20,10 +20,13 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { lcsLen } from './people.js';
+import { lcsLen } from './people.js?v=0.12.0';
 
 export const DEFAULT_FATE = {
     enabled: true,
+    shortEvery: 5,
+    longEvery: 10,
+    obsessionEvery: 15,
     /** 最多给几个 NPC 开栏(不含「共同」和「世界」)。推演是一人一次调用,开太多会很慢 */
     maxNpc: 4,
     /** 每人最多几条长期念头 */
@@ -148,7 +151,7 @@ export function coPresence(rows, name) {
     for (const r of rows ?? []) {
         if (r.isUser || r.hidden || !r.record) continue;
         const rec = r.record;
-        const hit = (rec.names ?? []).includes(name)
+        const hit = Array.isArray(rec.present) ? rec.present.includes(name) : (rec.names ?? []).includes(name)
             || (rec.affinity ?? []).some(x => x.name === name)
             || (rec.traits ?? []).some(x => x.name === name)
             || (rec.emotions ?? []).some(x => x.name === name);
@@ -159,7 +162,7 @@ export function coPresence(rows, name) {
 
 /** 一条念头的行为清单能不能发:要有至少一档写得具体的「界」,没有界就只剩强度失控的行为(道长) */
 export function actsSendable(idea, tiers = []) {
-    return idea?.state === '进行中' && idea.acts?.length > 0 && limitSteps(idea, tiers).length > 0;
+    return ['进行中', 'active'].includes(idea?.state) && idea.acts?.length > 0 && limitSteps(idea, tiers).length > 0;
 }
 
 /** 该不该跑推演了:隔够层数,或者剧情跳过了一天(跨夜之后当前行动就馊了) */
@@ -241,7 +244,8 @@ export function buildActsPrompt(fate, presentNames, cfg, ctx = {}) {
         if (!t || t.kind !== 'npc') continue;
         const affinity = people[name]?.affinity ?? 0;
         const floors = useAffinity ? 0 : coPresence(rows, name);
-        for (const idea of t.ideas ?? []) {
+        const ideas = t.thoughts ? [t.thoughts.short, ...t.thoughts.long, ...t.thoughts.obsession].filter(Boolean) : t.ideas ?? [];
+        for (const idea of ideas) {
             if (!actsSendable(idea, tiers)) continue;
             const step = currentLimit(idea, { affinity, floors, tiers, useAffinity, stepEvery });
             lines.push(`${name}在场时:`);

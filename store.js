@@ -8,8 +8,8 @@
  * 另存一个索引记"聊天名 → 编号"。
  */
 
-import { DEFAULT_PEOPLE } from './core/people.js';
-import { DEFAULT_FATE } from './core/fate.js';
+import { DEFAULT_PEOPLE } from './core/people.js?v=0.12.0';
+import { DEFAULT_FATE } from './core/fate.js?v=0.12.0';
 
 export const PREFIX = 'infinite-human-fate';
 export const FILES = {
@@ -228,6 +228,13 @@ export function newMemId() {
  */
 export function mergeMemory(local, remote) {
     if (!remote) return local;
+    if ((local.fate?.thoughtEngine || remote.fate?.thoughtEngine)
+        && (remote.rev ?? 0) > (local.rev ?? 0)
+        && JSON.stringify(local.fate?.thoughtEngine ?? local.fate) !== JSON.stringify(remote.fate?.thoughtEngine ?? remote.fate)) {
+        const error = new Error('另一台设备已更新念头，已停止保存以保护双方记录。请先导出本地记忆，再重新读取远端；本地修改仍在内存。');
+        error.name = 'MemoryConflictError';
+        throw error;
+    }
     const floors = { ...remote.floors };
     for (const [fp, rec] of Object.entries(local.floors)) {
         const other = floors[fp];
@@ -253,7 +260,9 @@ export function mergeMemory(local, remote) {
         // 她给谁标了 char / NPC,两边取并集,本地优先
         roles: { ...(isPlainObject(remote.roles) ? remote.roles : {}), ...(isPlainObject(local.roles) ? local.roles : {}) },
         // 幕后是存死的状态不是折算出来的,两边都写过就留较新的那份整份,别逐栏拼(拼出来会前后矛盾)
-        fate: (local.fate?.lastRunFloor ?? -1) >= (remote.fate?.lastRunFloor ?? -1) ? local.fate : remote.fate,
+        // A replay engine includes undo state. Never let an old survey timestamp replace its newer operations.
+        fate: local.fate?.thoughtEngine ? local.fate : remote.fate?.thoughtEngine ? remote.fate
+            : (local.fate?.lastRunFloor ?? -1) >= (remote.fate?.lastRunFloor ?? -1) ? local.fate : remote.fate,
         affinityInitAt: local.affinityInitAt ?? remote.affinityInitAt ?? 0,
         rev: Math.max(local.rev ?? 0, remote.rev ?? 0),
     };

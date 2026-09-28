@@ -9,8 +9,8 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { dayToDate, formatDate, fuzzyAgo } from './calendar.js';
-import { stripLedger } from './ledger.js';
+import { dayToDate, formatDate, fuzzyAgo } from './calendar.js?v=0.12.0';
+import { stripLedger } from './ledger.js?v=0.12.0';
 
 /**
  * 拦截器拿到的副本已经跑过正则(public/script.js:4447),没法按正文指纹认楼。

@@ -463,16 +463,17 @@ export function presentNames(rows, n) {
     let seen = 0;
     for (let i = rows.length - 1; i >= 0 && seen < n; i--) {
         const r = rows[i];
-        if (r.hidden) continue;
+        if (r.hidden || r.isUser) continue;
         seen++;
         const rec = r.record;
         if (!rec) continue;
         // 这一层写了「在场」就只认它。专名是给召回用的,地名物品和只被提一嘴的人都在里面,
         // 拿它当在场会把人错算成在场:Char1 一个人开车,正文里提了一句 Char2,Char2 就被算成在场,
         // 于是 Char2 从命运页消失。老楼没有这一行,退回专名那套,别让旧聊天一夜之间全变空场。
-        if (rec.present?.length) {
+        if (Array.isArray(rec.present)) {
             for (const x of rec.present) out.add(x);
-            continue;
+            // The latest explicit scene supersedes guesses from older floors, including an empty scene.
+            break;
         }
         for (const x of rec.names ?? []) out.add(x);
         for (const x of rec.affinity ?? []) out.add(x.name);
@@ -493,7 +494,7 @@ export function buildStatusSection({ people, promises, items = {}, rows, cfg, us
     const on = k => mod[k] !== false;
     let present = presentNames(rows, cfg.presentFloors ?? 12);
     // 开局那几层还没人记过账,谁都"没露面";这时候拿开局估出来的人顶上,免得头几轮一片空白
-    if (![...present].some(n => people[n])) {
+    if (![...present].some(n => people[n]) && !rows.some(r => !r.isUser && !r.hidden && Array.isArray(r.record?.present))) {
         const seeded = Object.values(people).filter(p => p.startSource).slice(0, 4).map(p => p.name);
         if (seeded.length) present = new Set(seeded);
     }

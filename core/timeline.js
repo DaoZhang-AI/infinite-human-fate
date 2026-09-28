@@ -9,7 +9,7 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { hashText } from './fingerprint.js';
+import { hashText } from './fingerprint.js?v=0.12.0';
 
 /** 旧版记忆文件的 timeline 是数组,统一成 段键 → 段 的对象 */
 export function normalizeTimeline(memory) {

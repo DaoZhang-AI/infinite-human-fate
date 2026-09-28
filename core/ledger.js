@@ -12,6 +12,8 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
+import { parseThoughtReceipt } from './thoughts.js?v=0.12.0';
+
 export const LEDGER_CLASS = 'ihf-ledger';
 
 const BLOCK_RE = /<details\b[^>]*\bclass\s*=\s*["'][^"']*\bihf-ledger\b[^"']*["'][^>]*>[\s\S]*?<\/details>/gi;
@@ -42,6 +44,7 @@ const LEDGER_LINES = {
         '情绪: (某角色这一层受了重大打击或刺激,整个人进入某种状态才写)角色 暴怒 起因。只能填 低落/暴怒/亢奋/恐惧 四种之一,缓过来了填 平稳。日常的小情绪不写。',
     ],
     fate: [
+        '念头✓: (只在本层正文明确给出指定尝试的执行结果时写，ID 原样抄)念头ID | 尝试ID | 进展/挫败/达成/放弃 | 实际结果 | 具体下次行动。仅浮现不算结果。',
         '幕后✓: (只有当这一层把上面[这一层必须发生]里那件事写进正文了,才写这行)那一栏的名字 已发生',
         '幕后✓: (这一层正文里出现了[如果这些场面出现了]里的场面、并且照写了那个人的反应,才写这行)名字 编号',
     ],
@@ -98,7 +101,7 @@ export function stripLedger(mes) {
         .trimEnd();
 }
 
-const KEYS = ['摘要', '专名', '在场', '时间', '约定+', '约定✓', '好感', '性格', '情绪', '破锚', '物品', '幕后✓'];
+const KEYS = ['摘要', '专名', '在场', '时间', '约定+', '约定✓', '好感', '性格', '情绪', '破锚', '物品', '幕后✓', '念头✓'];
 const KEY_RE = new RegExp('^\\s*(' + KEYS.map(k => k.replace(/[+✓]/g, '\\$&')).join('|') + ')\\s*[:：]\\s*(.*)$');
 
 /** 行首那个人名:去掉标点和"角色"这类占位词。认不出返回空串 */
@@ -208,7 +211,7 @@ export function splitNames(s) {
  */
 export function parseLedger(inner) {
     if (inner == null) return null;
-    const fields = { 摘要: [], 专名: [], 在场: [], 时间: [], '约定+': [], '约定✓': [], 好感: [], 性格: [], 情绪: [], 破锚: [], 物品: [], '幕后✓': [] };
+    const fields = Object.fromEntries(KEYS.map(k => [k, []]));
     let cur = null;
     for (const line of String(inner).split('\n')) {
         const m = line.match(KEY_RE);
@@ -225,7 +228,7 @@ export function parseLedger(inner) {
         names: splitNames(fields.专名.join(',')),
         // 在场是「谁真的在这一层的场景里」,和专名分开:专名含地名、物品、只被提到的人(9/23 修
         // 「命运里未在场的 NPC 不显示」,病根是拿专名当在场,提一嘴女友就把她算成在场)
-        present: splitNames(fields.在场.join(',')),
+        ...(fields.在场.length ? { present: splitNames(fields.在场.join(',')).filter(n => !/^(无|无人|没有|无人在场|none|null|\[\])$/i.test(n)) } : {}),
         timeRaw: (fields.时间[0] ?? '').trim(),
         promisesMade: fields['约定+'].filter(Boolean),
         promisesSettled: fields['约定✓'].filter(Boolean),
@@ -235,10 +238,11 @@ export function parseLedger(inner) {
         breaks: fields.破锚.map(parseBreakLine).filter(Boolean),
         items: fields.物品.map(parseItemLine).filter(Boolean),
         fateDone: fields['幕后✓'].map(l => String(l).replace(/[｜|]/g, ' ').replace(/已发生[。.]?$/, '').trim()).filter(Boolean),
+        thoughtResults: fields['念头✓'].map(parseThoughtReceipt).filter(Boolean),
     };
-    const any = summary || result.names.length || result.present.length || result.timeRaw || result.promisesMade.length
+    const any = summary || result.names.length || fields.在场.length || result.timeRaw || result.promisesMade.length
         || result.promisesSettled.length || result.traits.length || result.affinity.length
-        || result.emotions.length || result.breaks.length || result.items.length || result.fateDone.length;
+        || result.emotions.length || result.breaks.length || result.items.length || result.fateDone.length || result.thoughtResults.length;
     return any ? result : null;
 }
 
