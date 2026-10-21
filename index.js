@@ -12,26 +12,29 @@
  * 只用 SillyTavern.getContext(),不 import 酒馆内部文件,酒馆升级时少挨打。
  */
 
-import { buildLedgerInstruction, stripLedger } from './core/ledger.js?v=0.12.0';
-import { emptyMemory, pruneOrphans, reconcile, recordFromLedgerText } from './core/memory.js?v=0.12.0';
-import { formatDate } from './core/calendar.js?v=0.12.0';
-import { fingerprint } from './core/fingerprint.js?v=0.12.0';
-import { alignCoreToRaw, buildMemoryBlock, planZones } from './core/assemble.js?v=0.12.0';
-import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVec, nameIdf, normalize, pickPool, scoreCandidates, selectRecall, vecFresh } from './core/recall.js?v=0.12.0';
-import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateWorldMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js?v=0.12.0';
-import { activeArc, affinityTierOf, anchorKey, arcStageOf, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js?v=0.12.0';
-import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js?v=0.12.0';
-import { mountShell } from './ui.js?v=0.12.0';
-import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, scheduleIdeaDue, pickDueIdea, makeDuePending, buildTriggerPrompt, settleTriggered, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js?v=0.12.0';
-import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js?v=0.12.0';
-import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js?v=0.12.0';
+import { buildLedgerInstruction, stripLedger } from './core/ledger.js?v=0.13.0';
+import { emptyMemory, pruneOrphans, reconcile, recordFromLedgerText } from './core/memory.js?v=0.13.0';
+import { formatDate } from './core/calendar.js?v=0.13.0';
+import { fingerprint } from './core/fingerprint.js?v=0.13.0';
+import { alignCoreToRaw, buildMemoryBlock, planZones } from './core/assemble.js?v=0.13.0';
+import { bestCosine, buildQueries, cosineMaps, docText, extractNarrative, makeVec, nameIdf, normalize, pickPool, scoreCandidates, selectRecall, vecFresh } from './core/recall.js?v=0.13.0';
+import { buildAffinityInitMessages, buildBackfillMessages, buildBreakIfMessages, buildFateIdeaMessages, buildFateWorldMessages, buildFateSurveyMessages, buildOriginMessages, buildTimelineMessages, parseAffinityInit, parseBreakIf, parseFateIdeas, parseFateSurvey } from './core/prompts.js?v=0.13.0';
+import { anchorKey, buildAnchorPrompt, buildStatusSection, describeItems, needsAffinityInit, pendingAnchors, pendingOrigins, presentNames } from './core/people.js?v=0.13.0';
+import { normalizeTimeline, parseTimelineLines, planTimelineChunks } from './core/timeline.js?v=0.13.0';
+import { mountShell } from './ui.js?v=0.13.0';
+import { COMMON, WORLD, nextWorldFloor, pickWorldIdea, scheduleIdeaDue, pickDueIdea, makeDuePending, buildTriggerPrompt, settleTriggered, buildActsPrompt, buildNowPrompt, buildSurfacePrompt, canSurface, canSurfaceNow, coPresence, currentLimit, emptyFate, emptyThread, leakCheck, limitSteps, makePending, needsSurvey, pushLog, settlePending } from './core/fate.js?v=0.13.0';
+import { embed, rerank, listModels, probeRelay, relayAvailable, endpointReady, effectiveRerank, setHeaders } from './vector.js?v=0.13.0';
+import { FILES, loadConfig, loadIndex, mergeMemory, newMemId, readJson, saveConfigPatch, writeJson } from './store.js?v=0.13.0';
 
 /** 跟 manifest.json 的 version 和 ?v= 手动保持一致。
  *  酒馆加载扩展脚本的网址本身不带版本号,Cloudflare 会喂旧副本,靠这行在控制台辨认在跑哪一版。 */
-const VERSION = '0.12.0';
-import { activeIdeas, buildThoughtMessages, buildThoughtPrompt, commitThoughtPlan, compactThoughts, dispatchThoughts, generationThoughtRows, migrateThoughts, parseThoughtPlan, projectThoughts, thoughtClock } from './core/thoughts.js?v=0.12.0';
-import { awayPeopleHtml, currentThoughtHtml, fateThoughtHtml, thoughtCard } from './core/thought-ui.js?v=0.12.0';
-import { captureGuard, createMemoryWriter } from './core/runtime.js?v=0.12.0';
+const VERSION = '0.13.0';
+import { activeIdeas, buildThoughtMessages, buildThoughtPrompt, commitThoughtPlan, compactThoughts, dispatchThoughts, generationThoughtRows, migrateThoughts, parseThoughtPlan, projectThoughts, thoughtClock } from './core/thoughts.js?v=0.13.0';
+import { fateThoughtHtml } from './core/thought-ui.js?v=0.13.0';
+import { captureGuard, createMemoryWriter } from './core/runtime.js?v=0.13.0';
+import { allowedPerson, rememberPeople, inheritAffinity, eligibleSummaryIndices } from './core/dossiers.js?v=0.13.0';
+import { dossierHtml } from './core/dossier-ui.js?v=0.13.0';
+import { mountPersonHandlers } from './core/person-panel.js?v=0.13.0';
 
 const LOG = '[模拟人生]';
 const TITLE = '模拟人生';
@@ -80,6 +83,9 @@ const state = {
     onceTried: {},
     /** 查到有新版 */
     hasUpdate: false,
+    selectedPerson: '',
+    personDetail: false,
+    exportChoices: {},
 };
 
 /** 界面外壳(悬浮球 + 面板),mountPanel() 里建起来 */
@@ -109,6 +115,9 @@ async function openChat() {
     state.currentThoughts = {};
     state.thoughtTried = {};
     state.thoughtProjection = null;
+    state.selectedPerson = '';
+    state.personDetail = false;
+    state.exportChoices = {};
     state.jobs.stop = true;
     clearPrompts();
     state.chatId = chatId;
@@ -144,6 +153,7 @@ async function openChat() {
                 memory.affinityStart = structuredClone(mainMem.affinityStart ?? {});
                 memory.affinityInitAt = mainMem.affinityInitAt ?? 0;
                 memory.fate = structuredClone(mainMem.fate ?? emptyFate());
+                for (const key of ['roles', 'dossiers', 'personBlocks', 'recordEdits', 'excludedThreads']) memory[key] = structuredClone(mainMem[key] ?? {});
                 memory.branchOf = main;
                 console.info(LOG, `新分支,已从主线「${main}」复制 ${Object.keys(memory.floors).length} 条记录`);
             }
@@ -186,7 +196,16 @@ function refresh(forceSave = false) {
     const c = ctx();
     if (state.config?.enabled === false) return;
     if (!state.memory || c.getCurrentChatId() !== state.chatId) return;
-    state.view = reconcile(state.memory, c.chat, state.config.people);
+    const live = new Set(c.chat.map(m => fingerprint(m.mes, !!m.is_user)));
+    for (const [name, score] of Object.entries(state.memory.affinityStart ?? {})) {
+        if (score.source === 'inherited' && score.afterFp && !live.has(score.afterFp)) { delete state.memory.affinityStart[name]; scheduleSave(); }
+    }
+    state.view = reconcile(state.memory, c.chat, state.config.people, c.name1);
+    const names = knownPeople();
+    const added = rememberPeople(state.memory, names, c.name1, state.config.people.includeUser);
+    const inherited = inheritAffinity(state.memory, state.view.rows, c.chat, names);
+    if (inherited) state.view = reconcile(state.memory, c.chat, state.config.people, c.name1);
+    if (added || inherited) scheduleSave();
     // 删掉的楼、重 roll 滑走的那一版,摘要和向量一起清掉(道长 9/18)
     const pruned = pruneOrphans(state.memory, state.view.rows.map(r => r.fp));
     if (pruned) console.info(LOG, `聊天里找不到的楼清掉了 ${pruned} 条记录`);
@@ -339,13 +358,25 @@ function listConnections() {
 async function callModel(messages, backend) {
     const c = ctx();
     const valid = captureGuard(state, chatSignature);
+    state.jobController = new AbortController();
+    const check = () => {
+        valid();
+        if (state.jobs.stop) { const e = new Error('任务已停止'); e.name = 'AbortError'; throw e; }
+    };
+    const intervalMs = Math.ceil(60000 / Math.max(1, state.config.jobs.rpm));
+    while (Date.now() - (state.lastModelAt ?? 0) < intervalMs) { await sleep(200); check(); }
+    check();
+    state.lastModelAt = Date.now();
     if (backend === 'main') {
-        while (state.generating) { await sleep(1000); valid(); }
+        while (state.generating) { await sleep(200); check(); }
         const systemPrompt = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
         const prompt = messages.filter(m => m.role !== 'system').map(m => m.content).join('\n\n');
-        const result = await c.generateRaw({ systemPrompt, prompt });
-        valid();
-        return String(result ?? '');
+        state.mainJob = true;
+        try {
+            const result = await c.generateRaw({ systemPrompt, prompt });
+            check();
+            return String(result ?? '');
+        } finally { state.mainJob = false; }
     }
     const conn = listConnections().find(x => x.id === backend);
     if (!conn) throw new Error('选的副 API 找不到了(可能在别处被删了),去面板重新选一个');
@@ -356,7 +387,7 @@ async function callModel(messages, backend) {
     let res;
     if (backend.startsWith('st:')) {
         // 预设和指令格式都不带:记账、压时间线不该扛整套预设(状态栏、思维链那些),白烧 token
-        res = await c.ConnectionManagerRequestService.sendRequest(backend.slice(3), messages, maxTokens, { stream: false, extractData: true, includePreset: false, includeInstruct: false }, model ? { model } : {});
+        res = await c.ConnectionManagerRequestService.sendRequest(backend.slice(3), messages, maxTokens, { stream: false, extractData: true, includePreset: false, includeInstruct: false, signal: state.jobController.signal }, model ? { model } : {});
     } else {
         res = await c.ChatCompletionService.processRequest({
             stream: false,
@@ -366,9 +397,9 @@ async function callModel(messages, backend) {
             chat_completion_source: 'custom',
             custom_url: conn.url,
             secret_id: conn.secretId,
-        }, {}, true, null);
+        }, {}, true, state.jobController.signal);
     }
-    valid();
+    check();
     return String(typeof res === 'string' ? res : res?.content ?? '').trim();
 }
 
@@ -383,7 +414,6 @@ async function runJob(kind, units, doOne) {
     let stale = false;
     Object.assign(state.jobs, { running: true, kind, done: 0, total: units.length, failed: 0, stop: false, error: '' });
     render();
-    const gap = Math.ceil(60000 / Math.max(1, state.config.jobs.rpm));
     try {
         for (let k = 0; k < units.length; k++) {
             if (state.jobs.stop || state.epoch !== epoch || state.memId !== memId) break;
@@ -391,13 +421,12 @@ async function runJob(kind, units, doOne) {
                 await doOne(units[k]);
                 state.jobs.done++;
             } catch (e) {
-                if (e?.name === 'AbortError') { state.jobs.stop = true; stale = true; break; }
+                if (state.jobs.stop || e?.name === 'AbortError' || e?.cause?.name === 'AbortError') { stale = !state.jobs.stop; state.jobs.stop = true; break; }
                 state.jobs.failed++;
                 state.jobs.error = String(e?.cause?.message ?? e?.message ?? e);
                 console.warn(LOG, kind, '失败', e);
             }
             render();
-            if (k < units.length - 1 && !state.jobs.stop) await sleep(gap);
         }
     } finally {
         state.jobs.running = false;
@@ -408,6 +437,13 @@ async function runJob(kind, units, doOne) {
         else if (state.jobs.done) toastr.success(`${kind}:完成 ${state.jobs.done} 个`, TITLE);
         if ((!state.jobs.failed && !state.jobs.stop) || stale) autoJobs();
     }
+}
+
+function stopJob() {
+    state.jobs.stop = true;
+    state.jobController?.abort();
+    if (state.mainJob && !state.generating) ctx().stopGeneration?.();
+    render();
 }
 
 /** 补记账:没记过账的 AI 楼,拿"上一句用户发言 + 这层正文"让模型只写记账块 */
@@ -422,7 +458,7 @@ async function startBackfill(indices = null, which = null) {
         const m = raw[idx];
         if (!m || m.is_user || m.is_system) return;
         const fp = fingerprint(m.mes, false);
-        if (state.memory.floors[fp]) return; // 期间已经有记录了
+        if (state.memory.floors[fp]?.summary || state.memory.recordEdits?.[fp]?.deleted) return;
         let prevUser = '';
         for (let i = idx - 1; i >= 0; i--) {
             if (raw[i].is_system) continue;
@@ -439,7 +475,10 @@ async function startBackfill(indices = null, which = null) {
         const out = await callModel(messages, backend);
         const rec = recordFromLedgerText(out, 'backfill');
         if (!rec) throw new Error('模型没按格式写记账块');
-        state.memory.floors[fp] = rec;
+        if (state.memory.recordEdits?.[fp]) return;
+        const existing = state.memory.floors[fp];
+        state.memory.floors[fp] = existing ? { ...existing, summary: rec.summary, at: rec.at } : rec;
+        if (existing) delete state.memory.floors[fp].vec;
         scheduleSave();
     });
 }
@@ -466,10 +505,15 @@ async function startTimeline(which = null) {
     if (!chunks.length) return toastr.info('没有需要压的时间线(聊天还没长到"更早"区,或者都压过了)', TITLE);
     await runJob('压时间线', chunks, async ch => {
         const raw = ctx().chat;
-        const floors = ch.rows.map(r => ({
+        const floors = ch.rows.filter(r => !state.memory.recordEdits?.[r.fp]?.deleted).map(r => ({
             label: r.date ? `${formatDate(r.date)} Day${r.day}` : `Day${r.day}`,
-            text: extractNarrative(raw[r.index]?.mes).slice(0, state.config.timeline.floorChars),
+            text: (state.memory.recordEdits?.[r.fp] ? `用户校正后的记录，以此为准：${JSON.stringify(r.record)}`
+                : extractNarrative(raw[r.index]?.mes)).slice(0, state.config.timeline.floorChars),
         }));
+        if (!floors.length) {
+            state.memory.timeline[ch.key] = { key: ch.key, lines: [], at: Date.now() };
+            scheduleSave(); return;
+        }
         const out = await callModel(buildTimelineMessages(floors), backend);
         const lines = parseTimelineLines(out);
         if (!lines.length) throw new Error('模型没按格式写时间线');
@@ -499,6 +543,11 @@ function cardDescription() {
  *  她手改过的不会被这个覆盖,重估也只补没有的。 */
 async function startAffinityInit(which = null) {
     if (!state.memory || !state.view) return;
+    refresh();
+    rememberPeople(state.memory, knownPeople(), ctx().name1, state.config.people.includeUser);
+    scheduleSave();
+    renderPeople();
+    toastr.info(`人物卡已保存 ${knownPeople().size} 张，已有分数会保留，只补没有分数的人物`, TITLE);
     const backend = backendOf(which ?? state.config.jobs.backfillBackend);
     if (!backend) return toastr.warning('估开局好感选了副 API,但还没选是哪个连接配置', TITLE);
     const description = cardDescription();
@@ -512,8 +561,10 @@ async function startAffinityInit(which = null) {
         const rows = parseAffinityInit(out);
         if (!rows.length) throw new Error('模型没按"角色 分数 理由"的格式写');
         for (const r of rows) {
-            // 她手填过的不动
-            if (state.memory.affinityStart[r.name]?.source === 'manual') continue;
+            if (!allowedPerson(state.memory, r.name, c.name1, state.config.people.includeUser)) continue;
+            rememberPeople(state.memory, [r.name], c.name1, state.config.people.includeUser);
+            inheritAffinity(state.memory, state.view.rows, c.chat, [r.name]);
+            if (state.memory.affinityStart[r.name]) continue;
             state.memory.affinityStart[r.name] = { value: r.value, why: r.why, source: 'llm' };
         }
         state.memory.affinityInitAt = Date.now();
@@ -573,7 +624,9 @@ async function startOrigins(which = null) {
     const desc = cardDescription();
     if (!desc.trim()) return toastr.warning('这张卡没有角色描述,性格弧的起点只能在面板里手填', TITLE);
     await runJob('摘性格原句', todo, async name => {
+        const previous = state.memory.origins[name];
         const out = String(await callModel(buildOriginMessages({ name, description: desc }), backend) ?? '').trim();
+        if (state.memory.origins[name] !== previous) return;
         // 摘不到也要留个空字符串,否则每次对账都会再问一遍
         state.memory.origins[name] = /^无[。.]?$/.test(out) || out.length > 600 ? '' : out;
         scheduleSave();
@@ -585,7 +638,7 @@ async function startBreakIf(which = null) {
     if (!state.view) return;
     const backend = backendOf(which ?? state.config.jobs.backfillBackend);
     if (!backend) return toastr.warning('问破锚条件选了副 API,但还没选是哪个连接配置', TITLE);
-    const todo = pendingAnchors(state.view.people);
+    const todo = pendingAnchors(state.view.people).filter(x => !state.memory.anchors[anchorKey(x.name, x.seq)]?.manual);
     if (!todo.length) return toastr.info('没有缺破锚条件的性格弧', TITLE);
     await runJob('问破锚条件', todo, async ({ name, seq, arc }) => {
         // 只拿这条弧走过的那几层的摘要当材料,让它写出来的条件贴着这个故事
@@ -594,6 +647,7 @@ async function startBreakIf(which = null) {
             .map(l => byIndex.get(l.index)?.record?.summary)
             .filter(Boolean).slice(-8).join('\n');
         const out = await callModel(buildBreakIfMessages({ name, from: arc.from, to: arc.to, context }), backend);
+        if (state.memory.anchors[anchorKey(name, seq)]?.manual) return;
         const lines = parseBreakIf(out);
         if (!lines.length) throw new Error('模型写的破锚条件太空泛,一条都没留下');
         state.memory.anchors[anchorKey(name, seq)] = { name, seq, breakIf: lines, at: Date.now() };
@@ -623,10 +677,9 @@ function knownPeople() {
         ...Object.keys(state.memory?.affinityStart ?? {}),
         ...Object.values(state.memory?.fate?.threads ?? {}).filter(x => x.kind === 'npc').map(x => x.name),
         ...Object.keys(state.memory?.roles ?? {}),
+        ...Object.keys(state.memory?.dossiers ?? {}),
     ]);
-    set.delete(me);
-    set.delete('');
-    return set;
+    return new Set([...set].filter(n => allowedPerson(state.memory ?? {}, n, me, state.config?.people?.includeUser)));
 }
 
 /** 这一场在场的人:最近 sceneFloors 层 AI 回复的记账里出现过、而且是认得的人(专名里的地名物品不算) */
@@ -669,16 +722,19 @@ function cardOwners() {
     const roles = state.memory?.roles ?? {};
     const set = new Set(defaultOwners().filter(n => roles[n] !== 'npc'));
     for (const [n, r] of Object.entries(roles)) if (r === 'main') set.add(n);
-    return [...set];
+    return [...set].filter(n => allowedPerson(state.memory ?? {}, n, ctx().name1, state.config?.people?.includeUser));
 }
 
 /** 升为主要人物 / 降为 NPC。跟默认一样就不记,免得存一堆没用的 */
 function setRole(name, role) {
     if (!state.memory || !name) return;
-    const isDefaultMain = defaultOwners().includes(name);
+    if (!allowedPerson(state.memory, name, ctx().name1, state.config.people.includeUser)) return;
+    rememberPeople(state.memory, [name], ctx().name1, state.config.people.includeUser);
     state.memory.roles = state.memory.roles ?? {};
-    if ((role === 'main') === isDefaultMain) delete state.memory.roles[name];
-    else state.memory.roles[name] = role;
+    state.memory.roles[name] = role;
+    state.memory.dossiers[name].updated = Date.now();
+    state.selectedPerson = name;
+    state.personDetail = true;
     ensureThreads();
     scheduleSave();
     render();
@@ -692,9 +748,19 @@ function ensureThreads() {
     const fate = state.memory.fate;
     let added = 0;
     if (migrateThoughts(fate)) added++;
+    state.memory.excludedThreads ??= {};
+    for (const [name, thread] of Object.entries(fate.threads)) {
+        if (thread.kind !== 'npc' || allowedPerson(state.memory, name, ctx().name1, state.config.people.includeUser)) continue;
+        state.memory.excludedThreads[name] = thread;
+        delete fate.threads[name];
+        added++;
+    }
+    fate.excludedNames = [...new Set([...Object.keys(state.memory.personBlocks ?? {}).filter(n => state.memory.personBlocks[n].blocked),
+        ...Object.keys(state.memory.excludedThreads).filter(n => !allowedPerson(state.memory, n, ctx().name1, state.config.people.includeUser))])];
     for (const name of fateRoster()) {
         if (fate.threads[name]) continue;
-        fate.threads[name] = emptyThread(name, 'npc');
+        fate.threads[name] = state.memory.excludedThreads[name] ?? emptyThread(name, 'npc');
+        delete state.memory.excludedThreads[name];
         added++;
     }
     const npcCount = Object.values(fate.threads).filter(t => t.kind === 'npc').length;
@@ -758,7 +824,9 @@ async function startThoughtPlanning(which = null, automatic = false) {
             layers: clock.people[name], isPresent: sceneNames().has(name), romance: !!state.config.fate.romance }), backend);
         const plan = parseThoughtPlan(out);
         commitThoughtPlan(state.memory.fate, state.view.rows, state.config.fate, name, plan);
-        state.currentThoughts[name] = { text: typeof plan.current === 'string' ? plan.current : '', anchor: clock.anchor, turn: clock.turn };
+        if (!(state.currentThoughts[name]?.manual && state.currentThoughts[name].anchor === clock.anchor)) {
+            state.currentThoughts[name] = { text: typeof plan.current === 'string' ? plan.current : '', anchor: clock.anchor, turn: clock.turn };
+        }
         state.memory.fate.threads[name].at = Date.now();
         scheduleSave();
     });
@@ -862,16 +930,21 @@ function autoJobs() {
         if (!current.blocked && Object.keys(current.people).some(name => state.currentThoughts[name]?.anchor !== current.anchor
             && (state.thoughtTried[name + current.anchor] ?? 0) < 2)) return startThoughtPlanning('sub', true);
     }
+    if (cfg.ledger.mode === 'main-inline') {
+        const eligible = new Set(eligibleSummaryIndices(state.view.rows));
+        const settled = state.view.pending.filter(i => eligible.has(i));
+        if (settled.length) return startBackfill(settled.slice(0, Math.max(1, Number(cfg.jobs.backfillAuto) || 1)), sub ? 'sub' : 'main');
+    }
 
     // 每层都要跑的活(记账、补旧账、压时间线、幕后推演)只走副 API,不占主线额度
     if (sub) {
         // 最新那层 AI 回复先不写摘要:有人会重 roll,写了也白写(道长 9/18)。
         // 等她接着往下聊、它不再是最新的了,才轮到它
         const ais = state.view.rows.filter(r => !r.isUser && !r.hidden);
-        const newest = ais.at(-1)?.index;
+        const eligible = new Set(eligibleSummaryIndices(state.view.rows));
         if (cfg.ledger.mode === 'sub-after') {
-            const settled = ais.at(-2);
-            if (settled && !settled.record) {
+            const settled = ais.findLast(r => eligible.has(r.index));
+            if (settled && !settled.record?.summary && !state.memory.recordEdits?.[settled.fp]?.deleted) {
                 startBackfill([settled.index], 'sub');
                 return;
             }
@@ -879,7 +952,7 @@ function autoJobs() {
         // 几百层的老聊天一次补不完:每轮生成后从最早的往后补几层旧账,分批慢慢补完
         // (道长:必须从第 0 层往现在补,倒着补时间线会乱)。同样跳过最新那层
         const nAuto = Math.max(0, Math.floor(Number(cfg.jobs.backfillAuto) || 0));
-        const older = state.view.pending.filter(i => i !== newest);
+        const older = state.view.pending.filter(i => eligible.has(i));
         if (nAuto && cfg.jobs.backfillBackend === 'sub' && older.length) {
             return startBackfill(older.slice(0, nAuto), 'sub');
         }
@@ -902,7 +975,7 @@ function autoJobs() {
         if (needsAffinityInit(state.memory, cfg.people) && cardDescription().trim() && tryOnce('affinity', startAffinityInit)) return;
         if (cfg.people?.modules?.arc !== false) {
             if (pendingOrigins(state.view.people, state.memory.origins).length && tryOnce('origins', startOrigins)) return;
-            if (pendingAnchors(state.view.people).length && tryOnce('breakif', startBreakIf)) return;
+            if (pendingAnchors(state.view.people).some(x => !state.memory.anchors[anchorKey(x.name, x.seq)]?.manual) && tryOnce('breakif', startBreakIf)) return;
         }
     }
     if (cfg.fate?.enabled === false) return;
@@ -969,6 +1042,7 @@ async function runRecall(raw, view, zones, tier) {
     const idf = nameIdf(cands.map(r => r.record));
     const scored = scoreCandidates({ pool, cos, rr, query: qs.rank, idf, cfg: rc, lastDay: view.lastDay });
     const textFor = row => {
+        if (state.memory.recordEdits?.[row.fp]) return row.record.summary;
         const full = extractNarrative(raw[row.index].mes);
         if (tier.recallGives === 'full') return full;
         return summaryZone.has(row.index) ? full : row.record.summary;
@@ -1056,7 +1130,7 @@ async function planRun(core, type) {
     const c = ctx();
     if (!state.memory || c.getCurrentChatId() !== state.chatId) return null;
     const raw = c.chat;
-    const view = reconcile(state.memory, raw, state.config.people);
+    const view = reconcile(state.memory, raw, state.config.people, ctx().name1);
     state.view = view;
     if (view.added) scheduleSave();
 
@@ -1149,8 +1223,8 @@ globalThis.ihf_interceptor = async function (chat, _contextSize, _abort, type) {
         c.setExtensionPrompt(KEY_ANCHOR, plan?.anchor ?? '', IN_CHAT, depth, false, ROLE_SYSTEM);
 
         const inline = state.config.ledger.mode === 'main-inline';
-        const mods = { ...state.config.people?.modules, fate: state.config.fate?.enabled !== false };
-        const text = state.config.ledger.instruction || buildLedgerInstruction(mods);
+        const mods = { ...state.config.people?.modules, fate: state.config.fate?.enabled !== false, summary: false };
+        const text = (state.config.ledger.instruction || buildLedgerInstruction(mods)) + '\n摘要由系统在回复稳定后另行生成，本轮不要写摘要行。';
         c.setExtensionPrompt(KEY_LEDGER, inline ? text : '', IN_CHAT, depth, false, ROLE_SYSTEM);
 
         state.lastRun = plan?.block
@@ -1225,6 +1299,7 @@ function describeJobs() {
 }
 
 function render() {
+    ui?.setTask?.(state.jobs.running ? describeJobs() : state.emb.running ? '正在补算向量' : state.error || '暂无进行中的任务', state.jobs.running);
     const el = document.getElementById('ihf-status');
     if (!el) return;
     const lines = [];
@@ -1432,100 +1507,16 @@ function renderFate() {
 function renderPeople() {
     const el = document.getElementById('ihf-people-view');
     if (!el || ui?.current !== 'renlei') return;
-    const v = state.view;
-    const pcfg = state.config?.people;
-    if (!v) { el.innerHTML = '<span class="ihf-muted">先打开一场聊天</span>'; return; }
-    const mod = pcfg.modules ?? {};
-    const modOn = k => mod[k] !== false;
-    const out = [];
-    const offList = [['affinity', '好感度'], ['emotion', '情绪'], ['arc', '性格弧'], ['promise', '约定账'], ['item', '物品账']]
-        .filter(([k]) => !modOn(k)).map(([, n]) => n);
-    if (offList.length) out.push(`<div class="ihf-muted">已关掉:${offList.join('、')}(关着的这几块不记也不发,打开就又都算出来了)</div>`);
-    // 所有已知人物都在人类页：在场完整卡片，离场一行当前状态。
-    const here = sceneNames();
-    const stub = name => ({ name, affinity: state.memory?.affinityStart?.[name]?.value ?? 0, start: state.memory?.affinityStart?.[name]?.value ?? 0,
-        startWhy: state.memory?.affinityStart?.[name]?.why ?? '', startSource: state.memory?.affinityStart?.[name]?.source, emotion: null, arcs: [], affinityLog: [] });
-    const people = [...here].map(n => v.people?.[n] ?? stub(n));
-    const away = [...knownPeople()].filter(n => !here.has(n));
-    if (!people.length) out.push('<div class="ihf-muted">当前没有在场人物。</div>');
-    if (people.length) out.push('<h4>在场人物</h4>');
-    for (const p of people) {
-    const tier = affinityTierOf(pcfg.affinityTiers, p.affinity);
-    const pct = Math.round((Math.max(-100, Math.min(100, p.affinity)) + 100) / 2);
-    out.push(`<div class="ihf-thread" data-person="${escapeHtml(p.name)}">
-        <div class="ihf-person">
-          <div class="ihf-person-head"><b>${escapeHtml(p.name)}</b> ${roleChip(p.name)} <span class="ihf-muted">在场</span></div>
-          ${modOn('affinity') ? `
-          <div class="ihf-aff"><span class="ihf-affnum">${p.affinity}</span><span class="ihf-afftier">${escapeHtml(tier?.name ?? '')}</span></div>
-          <div class="ihf-bar ihf-affbar" title="-100 到 100"><div class="ihf-barfill" style="width:${pct}%"></div><div class="ihf-barmid"></div></div>
-          <div class="ihf-muted">${escapeHtml(tier?.text ?? '')}</div>
-          <div class="ihf-muted">开局 <input type="number" class="ihf-start" data-name="${escapeHtml(p.name)}" value="${p.start}" min="-100" max="100" style="width:4.5em">${p.startWhy ? ` ${p.startSource === 'manual' ? '(你改的)' : ''}${escapeHtml(p.startWhy)}` : ''}</div>` : ''}
-          ${p.emotion ? `<div>情绪:<b>${escapeHtml(p.emotion.kind)}</b>,还剩 ${p.emotion.left} 层 <span class="ihf-muted">起因:${escapeHtml(p.emotion.cause)}</span></div>` : (modOn('emotion') ? '<div class="ihf-muted">情绪:平静</div>' : '')}
-        </div>`);
-    const thread = state.memory?.fate?.threads?.[p.name];
-    if (state.config.fate?.enabled !== false) {
-        out.push(currentThoughtHtml(state.currentThoughts[p.name], !!state.config.jobs.subProfile));
-        for (const idea of activeIdeas(thread?.thoughts)) out.push(thoughtCard(idea));
-        if (!thread?.thoughts?.initialized) out.push('<div class="ihf-muted">四层念头尚未推演，正文更新后自动尝试，也可手动推演。</div>');
-    }
-    if (thread?.ideas?.length || thread?.log?.length) {
-        out.push(`<details><summary>旧版念头与日志，原样保留</summary>${(thread.ideas ?? []).map(it =>
-            `<div>${escapeHtml(it.text)}：${escapeHtml(it.state)}${Number.isFinite(it.surfacedAt) ? '，旧版已浮现' : ''}</div>`).join('')}
-            ${(thread.log ?? []).map(l => `<div>Day${l.day} ${escapeHtml(l.text)}</div>`).join('')}</details>`);
-    }
-    for (const a of p.arcs) {
-        const head = `弧${a.seq} ${escapeHtml(a.from ?? '(缺原句)')} → ${escapeHtml(a.to ?? '?')}`;
-        const tail = a.state === '封存'
-            ? `已封存,因为${escapeHtml(a.brokenBy)}`
-            : a.state === '锚定'
-                ? `已定型${a.breakIf.length ? '' : ' <span class="ihf-error">(还没问什么事会改性格)</span>'}`
-                : `${a.value}/${pcfg.anchorAt} ${arcStageOf(a.value, pcfg.anchorAt)}`;
-        out.push(`<div>　${head} · ${tail}</div>`);
-        if (a.state !== '封存' && a.state !== '锚定') out.push(`<div class="ihf-bar ihf-arcbar"><div class="ihf-barfill" style="width:${Math.round(Math.max(0, Math.min(1, a.value / pcfg.anchorAt)) * 100)}%"></div></div>`);
-        for (const c of a.breakIf) out.push(`<div class="ihf-muted">　　会让它再变的事:${escapeHtml(c)}</div>`);
-        for (const l of a.log.slice(-4)) out.push(`<div class="ihf-muted">　　Day${l.day} ${l.d > 0 ? '+' : ''}${l.d} ${escapeHtml(l.why)}</div>`);
-    }
-    const affLog = modOn('affinity') ? p.affinityLog.slice(-6) : [];
-    if (affLog.length) out.push('<div><b>好感怎么变的</b></div>');
-    for (const l of affLog) {
-        out.push(`<div class="ihf-muted">　Day${l.day} ${l.d > 0 ? '+' : ''}${l.d}${l.raw !== l.d ? `(模型写了 ${l.raw},卡在上限)` : ''} ${escapeHtml(l.why)}</div>`);
-    }
-    out.push('</div>');
-    }
-    if (away.length) {
-        out.push('<h4>离场人物</h4>');
-        out.push(awayPeopleHtml(away, state.memory?.fate?.threads, roleChip));
-    }
-    const open = modOn('promise') ? v.promises.filter(x => x.state === 'open') : [];
-    if (open.length) {
-        out.push('<div><b>未结的约定</b></div>');
-        for (const x of open) out.push(`<div class="ihf-muted">　Day${x.day} ${escapeHtml(x.text)}</div>`);
-    }
-    const things = modOn('item') ? Object.values(v.items ?? {}) : [];
-    if (things.length) {
-        out.push('<div><b>要紧的东西</b></div>');
-        for (const it of things) {
-            const where = it.lost || !it.holder ? '没了' : `在 ${it.holder} 手里`;
-            const n = escapeHtml(it.name);
-            out.push(`<div>　${n} · ${escapeHtml(where)}`
-                + ` <a class="ihf-block" data-which="never" data-word="${n}" title="以后这样东西一律不记">[不记]</a>`
-                + ` <a class="ihf-block" data-which="common" data-word="${n}" title="以后只有换了人拿或者丢了毁了才记">[只在出事时记]</a></div>`);
-            for (const l of it.log) {
-                out.push(`<div class="ihf-muted">　　Day${l.day} ${escapeHtml(l.from || '?')}→${escapeHtml(l.to || '没了')} ${escapeHtml(l.why)}</div>`);
-            }
-        }
-    }
-    const st = v.stats ?? {};
-    if (st.dropped || st.clamped || st.emotionSkipped) {
-        out.push(`<div class="ihf-muted">丢掉 ${st.dropped ?? 0} 条写得不合格的,卡上限 ${st.clamped ?? 0} 条,按冷却跳过情绪 ${st.emotionSkipped ?? 0} 条</div>`);
-    }
-    // 把拦掉的东西亮出来,好让她照着调 itemNever / itemCommon 两张表
-    if (modOn('item') && st.itemsBlocked?.length) {
-        const uniq = [...new Set(st.itemsBlocked)];
-        out.push(`<div class="ihf-muted">按禁词表拦掉 ${st.itemsBlocked.length} 条物品记录:${escapeHtml(uniq.slice(0, 20).join('、'))}${uniq.length > 20 ? '…' : ''}</div>`);
-        out.push('<div class="ihf-muted">拦错了就在下面的「物品禁词表」里把那个词删掉。</div>');
-    }
-    el.innerHTML = out.join('');
+    // Background save/progress updates must never erase an open editor or its unsaved input.
+    if (document.getElementById('ihf-person-editor')?.children?.length) return;
+    if (!state.view) { el.innerHTML = '<p class="ihf-muted">先打开一场聊天</p>'; return; }
+    const names = [...knownPeople()];
+    if (!names.includes(state.selectedPerson)) state.selectedPerson = names[0] || '';
+    el.innerHTML = dossierHtml({ memory: state.memory, view: state.view, names, selected: state.selectedPerson,
+        detail: state.personDetail, here: sceneNames(), roleOf, current: state.currentThoughts,
+        configured: !!state.config.jobs.subProfile, choices: state.exportChoices, exporting: state.exportingPerson === state.selectedPerson });
+    const user = document.getElementById('ihf-include-user');
+    if (user) user.checked = !!state.config.people.includeUser;
 }
 
 /** 设置表单:从 state.config 填进去 */
@@ -1682,9 +1673,9 @@ function renderTable() {
         // 剧情里的时间:日期 + 时段(道长 9/18 要的);Day 几放小字
         const date = r.date ? escapeHtml(formatDate(r.date)) : '';
         const when = `${date}${rec.timeOfDay ? ' ' + escapeHtml(rec.timeOfDay) : ''}<br><span class="ihf-muted">Day${r.day}</span>`;
-        return `<tr${r.hidden ? ' class="ihf-dim"' : ''}><td>${r.index}</td><td class="ihf-nowrap">${when}</td><td>${escapeHtml(rec.place || '')}</td><td>${escapeHtml(rec.summary)}</td><td>${escapeHtml((rec.names ?? []).join('、'))}</td></tr>`;
+        return `<tr${r.hidden ? ' class="ihf-dim"' : ''}><td>${r.index}</td><td class="ihf-nowrap">${when}</td><td>${escapeHtml(rec.place || '')}</td><td>${escapeHtml(rec.summary)}</td><td>${escapeHtml((rec.names ?? []).join('、'))}</td><td><button type="button" class="ihf-btn" data-table-edit="${r.fp}">修改 / 删除</button></td></tr>`;
     });
-    el.innerHTML = `<div class="ihf-scroll"><table class="ihf-table"><thead><tr><th>层</th><th>剧情时间</th><th>地点</th><th>发生了什么</th><th>涉及的人和地方</th></tr></thead><tbody>${cells.join('')}</tbody></table></div>`
+    el.innerHTML = `<div class="ihf-scroll"><table class="ihf-table"><thead><tr><th>层</th><th>剧情时间</th><th>地点</th><th>发生了什么</th><th>涉及的人和地方</th><th>编辑</th></tr></thead><tbody>${cells.join('')}</tbody></table></div>`
         + `<div class="ihf-muted">共 ${rows.length} 层有记录${rows.some(r => r.hidden) ? ';灰的是已被隐藏的楼' : ''}`
         + `${made ? '。正文里没写日期,开局那天是按现实日子编的,正文一出现「X月X日」或「📅 09.28」这种写法就会改成正文里的' : ''}</div>`;
 }
@@ -1855,7 +1846,7 @@ const PAGE_HTML = {
         <button id="ihf-stop" class="ihf-btn" style="display:none">停止</button>
       </div>
       <hr class="ihf-sep">
-      <div class="ihf-card"><h4>全景表(从开局到现在)</h4><div id="ihf-table-view"></div></div>
+      <div class="ihf-card"><h4>全景表(从开局到现在)</h4><div id="ihf-table-view"></div><div id="ihf-table-editor"></div></div>
       <div class="ihf-card"><h4>时间线(更早的楼压成的)</h4><div id="ihf-tl-view" class="ihf-rows"></div></div>`,
 
     renlei: `
@@ -1864,7 +1855,7 @@ const PAGE_HTML = {
         <summary>手动重跑(平时不用点)</summary>
         <div class="ihf-muted">开局好感、性格原句、什么事会改性格,开局都会自动做:选了副 API 用副 API,没选就用主 API。自动那次失败了,或者你想重来,才点这里。</div>
         <div class="ihf-acts">
-          <button id="ihf-affinit" class="ihf-btn" title="按人设和开场白,给每个人估一个开局好感">估一下开局好感</button>
+          <button id="ihf-affinit" class="ihf-btn" title="按人设和开场白,给每个人估一个开局好感">建立人物卡并补好感</button>
           <button id="ihf-origins" class="ihf-btn" title="从人设里摘出每个人的性格原句,性格弧从这儿起">从人设里摘性格</button>
           <button id="ihf-breakif" class="ihf-btn" title="性格定型之后,问模型什么事会让它再变">问什么事会改性格</button>
         </div>
@@ -1942,7 +1933,7 @@ const PAGE_HTML = {
           <label><span class="ihf-lab">档位</span><select id="ihf-tier"><option value="">跟着模型自动</option><option value="big">锁定大模型档</option><option value="small">锁定小模型档</option></select></label>
           <label><input type="checkbox" id="ihf-recall-on"> 开启召回</label>
           <label><span class="ihf-lab">召回查询</span><select id="ihf-qmode"><option value="split">分开用(推荐)</option><option value="concat">拼在一起</option></select></label>
-          <label><span class="ihf-lab">每层记账</span><select id="ihf-ledger"><option value="main-inline">主 API 随正文写</option><option value="sub-after">副 API 补写(晚一层写,重 roll 不白写)</option><option value="off">不记</option></select></label>
+        <label><span class="ihf-lab">每层记账</span><select id="ihf-ledger"><option value="main-inline">主 API 记录变化，摘要延后补写</option><option value="sub-after">副 API 补写(原先时机再延后两层)</option><option value="off">不记</option></select></label>
         </div>
       </div>
       <div class="ihf-card">
@@ -2027,16 +2018,20 @@ function mountPanel() {
         onMove: pos => saveUiPatch({ ballPos: pos }),
         onTheme: theme => saveUiPatch({ theme }),
         onShow: () => render(),
+        onStop: stopJob,
     });
     for (const [key, html] of Object.entries(PAGE_HTML)) {
         const page = ui.page(key);
         if (page) page.innerHTML = html;
     }
 
+    mountPersonHandlers({ state, ctx, render, refresh, scheduleSave, setRole, knownPeople, runJob, callModel, backendOf, roleOf,
+        stop: stopJob });
+
     $('#ihf-reload').on('click', () => openChat());
     $('#ihf-backfill').on('click', () => startBackfill());
     $('#ihf-timeline').on('click', () => startTimeline());
-    $('#ihf-stop').on('click', () => { state.jobs.stop = true; render(); });
+    $('#ihf-stop').on('click', stopJob);
     $('#ihf-save, #ihf-save2, #ihf-save3').on('click', () => saveSettings());
     $('#ihf-export').on('click', () => exportMemory());
     $('#ihf-import').on('click', () => $('#ihf-import-file').val('').trigger('click'));
@@ -2087,7 +2082,7 @@ function mountPanel() {
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
-      <div class="ihf-status ihf-muted">平时用右边那颗 ♾️ 悬浮球,可以随便拖,靠边会自己缩进去一半。</div>
+      <div class="ihf-status ihf-muted">右侧三个球分别进入人类、无限、命运；可以拖动整组入口。</div>
       <div class="ihf-actions">
         <div id="ihf-open" class="menu_button">打开面板</div>
       </div>

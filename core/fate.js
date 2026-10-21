@@ -20,7 +20,7 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { lcsLen } from './people.js?v=0.12.0';
+import { lcsLen } from './people.js?v=0.13.0';
 
 export const DEFAULT_FATE = {
     enabled: true,

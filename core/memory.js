@@ -10,11 +10,12 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { fingerprint } from './fingerprint.js?v=0.12.0';
-import { extractLedger, parseLedger, parseLegacyMatrix } from './ledger.js?v=0.12.0';
-import { dayToDate, detectStartDate, parseDelta } from './calendar.js?v=0.12.0';
-import { DEFAULT_PEOPLE, foldPeople } from './people.js?v=0.12.0';
-import { emptyFate } from './fate.js?v=0.12.0';
+import { fingerprint } from './fingerprint.js?v=0.13.0';
+import { extractLedger, parseLedger, parseLegacyMatrix } from './ledger.js?v=0.13.0';
+import { dayToDate, detectStartDate, parseDelta } from './calendar.js?v=0.13.0';
+import { DEFAULT_PEOPLE, foldPeople } from './people.js?v=0.13.0';
+import { emptyFate } from './fate.js?v=0.13.0';
+import { allowedPerson } from './dossiers.js?v=0.13.0';
 
 export const MEMORY_FORMAT = 1;
 
@@ -110,14 +111,15 @@ export function recordFromMessage(mes) {
  * @param {object} [peopleCfg] config.people
  * @returns {{rows: object[], added: number, pending: number[], lastDay: number, start: object|null, people: object, promises: object[]}}
  */
-export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE) {
+export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE, userName = '') {
     const rows = [];
     let added = 0;
     for (let i = 0; i < chat.length; i++) {
         const m = chat[i];
         const isUser = !!m.is_user;
         const fp = fingerprint(m.mes, isUser);
-        let rec = memory.floors[fp] ?? null;
+        const deleted = memory.recordEdits?.[fp]?.deleted;
+        let rec = deleted ? null : memory.floors[fp] ?? null;
         // Repair cached v0.11 records from their own ledger, without a model call or replacing vectors.
         if (rec && !isUser && (!Object.hasOwn(rec, 'present') || !Object.hasOwn(rec, 'thoughtResults'))) {
             const ledger = parseLedger(extractLedger(m.mes));
@@ -132,7 +134,7 @@ export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE) {
             }
             if (repaired) { rec.at = Date.now(); added++; }
         }
-        if (!rec && !isUser) {
+        if (!rec && !isUser && !deleted) {
             rec = recordFromMessage(m.mes);
             if (rec) {
                 memory.floors[fp] = rec;
@@ -182,11 +184,17 @@ export function reconcile(memory, chat, peopleCfg = DEFAULT_PEOPLE) {
     }
     const start = memory.calendar.start;
 
-    const pending = rows.filter(r => !r.isUser && !r.hidden && !r.record).map(r => r.index);
+    const pending = rows.filter(r => !r.isUser && !r.hidden && !r.record?.summary && !memory.recordEdits?.[r.fp]?.deleted).map(r => r.index);
+    const peopleRows = rows.map(r => !r.record ? r : ({ ...r, record: { ...r.record,
+        ...Object.fromEntries(['affinity', 'traits', 'emotions', 'breaks'].map(k => [k,
+            (r.record[k] ?? []).filter(x => allowedPerson(memory, x.name, userName, peopleCfg.includeUser))])),
+        present: (r.record.present ?? r.record.names ?? []).filter(n => allowedPerson(memory, n, userName, peopleCfg.includeUser)),
+    } }));
     // 好感、性格弧、情绪、约定账和日期一样,都是按楼序现折算出来的,不存死值
     const folded = peopleCfg?.enabled === false
         ? { people: {}, promises: [], stats: {} }
-        : foldPeople(rows, peopleCfg, memory.origins ?? {}, memory.anchors ?? {}, memory.affinityStart ?? {});
+        : foldPeople(peopleRows, peopleCfg, memory.origins ?? {}, memory.anchors ?? {},
+            Object.fromEntries(Object.entries(memory.affinityStart ?? {}).filter(([n]) => allowedPerson(memory, n, userName, peopleCfg.includeUser))));
     return { rows, added, pending, lastDay: day, start, ...folded };
 }
 

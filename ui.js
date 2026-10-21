@@ -30,10 +30,10 @@ const CSS = `
 #ihf-ball {
   position: fixed; right: 12px; top: 40vh;
   z-index: 9998;
-  width: 38px; height: 38px;
-  display: flex; align-items: center; justify-content: center;
+  width: 154px; min-height: 76px;
+  display: flex; flex-direction: column; align-items: stretch; justify-content: center;
   font-size: 20px; line-height: 1;
-  border-radius: 50%;
+  border-radius: 12px;
   background: var(--ihf-bg, #161225);
   border: 1px solid var(--ihf-border, rgba(140,130,200,.25));
   box-shadow: 0 4px 14px rgba(0,0,0,.35);
@@ -41,11 +41,12 @@ const CSS = `
   transition: opacity .25s, transform .25s;
 }
 #ihf-ball:active { cursor: grabbing; }
+#ihf-ball[hidden] {display:none}
 #ihf-ball.ihf-busy .ihf-ball-icon { animation: ihf-spin 1.4s linear infinite; }
 @keyframes ihf-spin { to { transform: rotate(360deg); } }
 /* 停在边上就缩进去一半,不挡正文(道长要的) */
-#ihf-ball.ihf-tuck-right { transform: translateX(45%); opacity: .45; }
-#ihf-ball.ihf-tuck-left  { transform: translateX(-45%); opacity: .45; }
+#ihf-ball.ihf-tuck-right { opacity: .7; }
+#ihf-ball.ihf-tuck-left  { opacity: .7; }
 #ihf-ball:hover { transform: none !important; opacity: 1; }
 #ihf-ball .ihf-ball-dot {
   position: absolute; top: 1px; right: 1px;
@@ -133,6 +134,35 @@ const CSS = `
 .ihf-body::-webkit-scrollbar-thumb { background: var(--ihf-bg3); border-radius: 2px; }
 .ihf-page { display: none; }
 .ihf-page.ihf-on { display: block; }
+.ihf-ball-row {display:flex;justify-content:center;gap:8px;padding:6px}
+.ihf-orb {width:38px;height:38px;flex:0 0 38px;border-radius:50%;border:1px solid #8d83af;background:#27213a;color:#eee;font-size:20px;cursor:pointer}
+.ihf-task {display:flex;align-items:center;gap:6px;padding:8px 12px;min-height:35px;box-sizing:border-box;flex-shrink:0;border-bottom:1px solid var(--ihf-border,#6f648a);font-size:12px;line-height:1.5;color:var(--ihf-text,#eee);background:var(--ihf-bg,#211b30)}
+.ihf-task span {flex:1;overflow-wrap:anywhere}
+.ihf-task button {flex:none;border:1px solid #8d83af;border-radius:5px;background:transparent;color:inherit;cursor:pointer}
+#ihf-ball .ihf-task {border-radius:12px 12px 0 0;padding:6px;font-size:11px}
+.ihf-deck {display:flex;justify-content:center;perspective:1000px;margin:18px 0;touch-action:pan-y}
+.ihf-playing-card {position:relative;box-sizing:border-box;width:min(270px,100%);min-height:390px;aspect-ratio:2.5/3.8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:54px 22px 30px;border:1px solid var(--ihf-accent);border-radius:16px;box-shadow:0 10px 24px #0004;background:var(--ihf-bg2);color:var(--ihf-text);font-family:inherit;cursor:pointer;transition:transform .22s}
+.ihf-playing-card:before {content:'';position:absolute;inset:7px;border:1px solid var(--ihf-border);border-radius:10px;pointer-events:none}
+.ihf-playing-card.ihf-flipping {transform:rotateY(90deg)}
+.ihf-card-corner {position:absolute;left:20px;top:18px;font-size:26px;line-height:1}
+.ihf-card-corner small {display:block;font-size:11px;margin-top:4px}
+.ihf-card-name {font-family:Georgia,'Noto Serif SC','SimSun',serif;font-size:28px;font-weight:bold;overflow-wrap:anywhere;max-width:100%}
+.ihf-card-score {font-size:36px;font-variant-numeric:tabular-nums;color:var(--ihf-accent)}
+.ihf-card-score small {display:block;font-size:12px;color:var(--ihf-text2)}
+.ihf-card-thought {font-size:15px;line-height:1.7;overflow-wrap:anywhere}
+.ihf-card-foot {font-size:11px;color:var(--ihf-text2);line-height:1.7}
+.ihf-deck-nav {display:flex;align-items:center;justify-content:center;gap:16px}
+.ihf-roster {display:flex;gap:6px;overflow-x:auto;padding:16px 0}
+.ihf-roster-person {flex:0 0 auto;border:1px solid var(--ihf-border);border-radius:6px;background:var(--ihf-bg2);color:var(--ihf-text2);padding:5px 8px;font:inherit;cursor:pointer}
+.ihf-roster-person.ihf-on {border-color:var(--ihf-accent);color:var(--ihf-text)}
+.ihf-record-preview {white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:300px;overflow:auto;background:var(--ihf-input-bg);padding:10px;border-radius:8px}
+.ihf-person-detail h4 {margin:20px 0 8px}
+.ihf-edit-field {min-width:0;margin:8px 0;padding-left:8px;border-left:1px solid var(--ihf-border)}
+.ihf-edit-field>label {font-size:12px;color:var(--ihf-text2);margin-bottom:4px}
+.ihf-edit-field textarea {box-sizing:border-box;min-width:0;max-width:100%}
+.ihf-edit-field .ihf-btn {margin-top:5px}
+#ihf-panel :focus-visible {outline:2px solid var(--ihf-accent);outline-offset:3px}
+@media(prefers-reduced-motion:reduce) {.ihf-playing-card,#ihf-panel,#ihf-overlay {transition:none}}
 
 /* ── 页内零件 ── */
 .ihf-body .ihf-muted { color: var(--ihf-text2); font-size: .84em; line-height: 1.65; }
@@ -256,7 +286,7 @@ function injectStyle() {
  * @param {(theme:string)=>void} o.onTheme 切了日夜
  * @param {(key:string)=>void} o.onShow 换页了,让 index.js 现渲染那一页
  */
-export function mountShell({ version, emoji = '♾️', pos = null, theme = 'night', onMove, onTheme, onShow }) {
+export function mountShell({ version, pos = null, theme = 'night', onMove, onTheme, onShow, onStop }) {
     injectStyle();
     document.getElementById('ihf-ball')?.remove();
     document.getElementById('ihf-overlay')?.remove();
@@ -264,8 +294,8 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
     const ball = document.createElement('div');
     ball.id = 'ihf-ball';
     ball.title = '模拟人生,点开看;可以拖';
-    ball.innerHTML = '<span class="ihf-ball-icon"></span><span class="ihf-ball-dot"></span>';
-    ball.querySelector('.ihf-ball-icon').textContent = emoji;
+    ball.innerHTML = '<div class="ihf-task"><span>暂无进行中的任务</span><button type="button" hidden aria-label="停止当前任务">停止</button></div>'
+        + '<div class="ihf-ball-row">' + TABS.map(t => `<button type="button" class="ihf-orb" data-tab="${t.key}" title="${t.name}"><span class="ihf-ball-icon">${t.icon}</span></button>`).join('') + '</div><span class="ihf-ball-dot"></span>';
     document.body.appendChild(ball);
 
     const overlay = document.createElement('div');
@@ -282,12 +312,20 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
     <button class="ihf-icon-btn" id="ihf-theme" title="切换日夜">🌗</button>
     <button class="ihf-icon-btn" id="ihf-close" title="关闭">✕</button>
   </div>
+  <div class="ihf-task" id="ihf-task-bar" role="status" aria-live="polite"><span>暂无进行中的任务</span><button type="button" hidden aria-label="停止当前任务">停止</button></div>
   <div class="ihf-tabs">${tabsHtml}</div>
   <div class="ihf-body">${pagesHtml}</div>
 </div>`;
     document.body.appendChild(overlay);
 
     const panel = overlay.querySelector('#ihf-panel');
+    for (const stop of [ball.querySelector('.ihf-task button'), panel.querySelector('.ihf-task button')]) {
+        stop.addEventListener('pointerdown', e => e.stopPropagation());
+        stop.addEventListener('click', e => { e.stopPropagation(); onStop?.(); });
+    }
+    ball.querySelectorAll('.ihf-orb').forEach(b => b.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(b.dataset.tab); open(); }
+    }));
     const applyTheme = t => panel.classList.toggle('ihf-day', t === 'day');
     applyTheme(theme);
 
@@ -347,7 +385,9 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
     let moved = false;
     let dx = 0;
     let dy = 0;
+    let pressedTab = null;
     ball.addEventListener('pointerdown', e => {
+        pressedTab = e.target.closest?.('[data-tab]')?.dataset.tab;
         dragging = true; moved = false;
         const r = ball.getBoundingClientRect();
         dx = e.clientX - r.left;
@@ -371,7 +411,10 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
         try { ball.releasePointerCapture(e.pointerId); } catch { /* 指针没了就算了 */ }
         clamp();
         if (moved) onMove?.({ left: ball.offsetLeft, top: ball.offsetTop });
-        else open();
+        else {
+            if (pressedTab) show(pressedTab);
+            open();
+        }
     };
     ball.addEventListener('pointerup', endDrag);
     ball.addEventListener('pointercancel', endDrag);
@@ -388,6 +431,12 @@ export function mountShell({ version, emoji = '♾️', pos = null, theme = 'nig
         setBusy: on => ball.classList.toggle('ihf-busy', !!on),
         setWarn: on => ball.classList.toggle('ihf-warn', !!on),
         setBallVisible: on => { ball.hidden = !on; },
+        setTask: (text, running) => {
+            for (const bar of [ball.querySelector('.ihf-task'), panel.querySelector('.ihf-task')]) {
+                bar.querySelector('span').textContent = text;
+                bar.querySelector('button').hidden = !running;
+            }
+        },
         destroy: () => {
             document.removeEventListener('keydown', onEsc);
             ball.remove();

@@ -9,7 +9,7 @@ export const reply = (mes, index, isUser = false) => ({ mes, name: isUser ? 'Use
 
 /** Evaluate the real entry and its imports with a synthetic host. No initialization callbacks or timers run. */
 export async function harness() {
-    const elements = new Map(['ihf-people-view', 'ihf-fate-view'].map(id => [id, { innerHTML: '' }]));
+    const elements = new Map(['ihf-people-view', 'ihf-fate-view', 'ihf-table-view'].map(id => [id, { innerHTML: '' }]));
     const calls = [];
     const timers = new Map();
     const chat = [reply('<ihf-ledger>摘要: Char1 和 Char2 在场\n在场: Char1, Char2</ihf-ledger>', 0)];
@@ -35,7 +35,8 @@ export async function harness() {
         if (!cache.has(key)) cache.set(key, (async () => {
             let source = await readFile(fileURLToPath(url), 'utf8');
             if (url.pathname.endsWith('/index.js')) source += `\nexport {state, renderPeople, renderFate, sceneNames, ensureThreads, refresh,
-                planRun, startThoughtPlanning, startBackfill, currentStory, openChat, autoJobs, saveMemory, importMemory};
+                planRun, startThoughtPlanning, startBackfill, currentStory, openChat, autoJobs, saveMemory, importMemory,
+                knownPeople, setRole, startAffinityInit, renderTable, runJob, callModel, stopJob};
                 export function testPanel(page) { ui = {current:page}; }`;
             return new vm.SourceTextModule(source, { identifier: key, context: sandbox });
         })());
@@ -52,6 +53,7 @@ export async function harness() {
         memId: 'fixture', chatId: 'fixture', lastTier: 'big' });
     api.state.config.recall.enabled = false;
     api.state.config.jobs.subProfile = 'st:fixture';
+    api.state.config.jobs.rpm = Infinity; // No real scheduler sleeps in this isolated host.
     api.state.config.fate.world = false;
     api.state.memory.affinityStart = { Char1: { value: 10 }, Char2: { value: 20 }, NPC: { value: 0 } };
     api.state.view = reconcile(api.state.memory, chat);

@@ -17,6 +17,7 @@
 /** 默认设置。放在这里而不是 store.js,是为了让 core/ 在 node 里能独立跑测试 */
 export const DEFAULT_PEOPLE = {
     enabled: true,
+    includeUser: false,
     /** 四块各自能单独关(道长:有些角色卡自带好感度,两套一起发会打架)。
      *  关掉的那块:记账要求里那几行不发、折算时不认、也不注入;
      *  已经记在各层里的原始行照样留着,回头再打开就又都算出来了。 */
@@ -268,6 +269,8 @@ export function foldPeople(rows, cfg, origins = {}, anchors = {}, starts = {}) {
     const cooldown = cfg.emotionCooldown ?? 10;
 
     const get = name => (people[name] ??= emptyPerson(name));
+    const checkpoints = Object.fromEntries(Object.entries(starts).map(([name, st]) => [name,
+        st.afterFp ? rows.find(r => r.fp === st.afterFp)?.index ?? -1 : st.afterIndex ?? -1]));
     let aiFloor = 0;
 
     for (const r of rows) {
@@ -288,6 +291,7 @@ export function foldPeople(rows, cfg, origins = {}, anchors = {}, starts = {}) {
 
         // 好感
         for (const it of on('affinity') ? rec.affinity ?? [] : []) {
+            if (r.index <= (checkpoints[it.name] ?? -1) || starts[it.name]?.coveredFps?.includes(r.fp)) continue;
             if (!it.name || !it.why) { stats.dropped++; continue; }
             const p = get(it.name);
             const d = clampStep(it.d, step);

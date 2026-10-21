@@ -125,6 +125,8 @@ export function fuzzyAgo(diff, oldMonth = null) {
         const txt = Number.isInteger(m) ? `约${cn(m)}个月前` : `约${cn(Math.floor(m))}个半月前`;
         return oldMonth ? `${txt}·${SEASON_DETAIL[oldMonth]}` : txt;
     }
+    if (diff < 550) return '一年多前';
+    if (diff < 730) return '将近两年前';
     const y = Math.round(diff / 365);
     if (!oldMonth) return `约${cn(y)}年前`;
     const head = y === 1 ? '去年' : y === 2 ? '前年' : `${cn(y)}年前的`;

@@ -12,7 +12,7 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { parseThoughtReceipt } from './thoughts.js?v=0.12.0';
+import { parseThoughtReceipt } from './thoughts.js?v=0.13.0';
 
 export const LEDGER_CLASS = 'ihf-ledger';
 
@@ -61,7 +61,7 @@ const MULTI = { affinity: ['好感'], arc: ['性格', '破锚'], emotion: ['情�
 export function buildLedgerInstruction(modules = {}) {
     const on = k => modules[k] !== false;
     const body = [
-        ...LEDGER_LINES.always,
+        ...LEDGER_LINES.always.filter(line => modules.summary !== false || !line.startsWith('摘要:')),
         ...(on('promise') ? LEDGER_LINES.promise : []),
         ...(on('affinity') ? LEDGER_LINES.affinity : []),
         ...(on('arc') ? LEDGER_LINES.arc : []),

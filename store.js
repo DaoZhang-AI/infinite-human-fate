@@ -8,8 +8,8 @@
  * 另存一个索引记"聊天名 → 编号"。
  */
 
-import { DEFAULT_PEOPLE } from './core/people.js?v=0.12.0';
-import { DEFAULT_FATE } from './core/fate.js?v=0.12.0';
+import { DEFAULT_PEOPLE } from './core/people.js?v=0.13.0';
+import { DEFAULT_FATE } from './core/fate.js?v=0.13.0';
 
 export const PREFIX = 'infinite-human-fate';
 export const FILES = {
@@ -226,6 +226,14 @@ export function newMemId() {
  * 时间线按段键取并集,同一段两边都有以本地为准;历法以本地为准。
  * 性格原句和锚定记录(破锚条件)也按键取并集,本地优先。
  */
+function mergeStamped(remote = {}, local = {}) {
+    const result = { ...remote };
+    for (const [name, entry] of Object.entries(local)) {
+        if (!result[name] || (entry.updated ?? 0) >= (result[name].updated ?? 0)) result[name] = entry;
+    }
+    return result;
+}
+
 export function mergeMemory(local, remote) {
     if (!remote) return local;
     if ((local.fate?.thoughtEngine || remote.fate?.thoughtEngine)
@@ -248,17 +256,30 @@ export function mergeMemory(local, remote) {
     for (const [fp, at] of Object.entries(pruned)) {
         if (floors[fp] && (floors[fp].at ?? 0) <= at) delete floors[fp];
     }
+    const recordEdits = mergeStamped(remote.recordEdits, local.recordEdits);
+    for (const [fp, edit] of Object.entries(recordEdits)) {
+        if (edit.deleted) delete floors[fp];
+        else if (edit.record) floors[fp] = edit.record;
+    }
+    const timelineResetAt = Math.max(local.timelineResetAt ?? 0, remote.timelineResetAt ?? 0);
+    const timeline = Object.fromEntries(Object.entries({ ...remote.timeline, ...local.timeline })
+        .filter(([, segment]) => (segment.at ?? 0) > timelineResetAt));
     return {
         ...local,
         pruned,
         floors,
         calendar: local.calendar?.start ? local.calendar : remote.calendar,
-        timeline: { ...(isPlainObject(remote.timeline) ? remote.timeline : {}), ...(isPlainObject(local.timeline) ? local.timeline : {}) },
+        timeline,
+        timelineResetAt,
         origins: { ...(isPlainObject(remote.origins) ? remote.origins : {}), ...(isPlainObject(local.origins) ? local.origins : {}) },
         anchors: { ...(isPlainObject(remote.anchors) ? remote.anchors : {}), ...(isPlainObject(local.anchors) ? local.anchors : {}) },
         affinityStart: { ...(isPlainObject(remote.affinityStart) ? remote.affinityStart : {}), ...(isPlainObject(local.affinityStart) ? local.affinityStart : {}) },
         // 她给谁标了 char / NPC,两边取并集,本地优先
         roles: { ...(isPlainObject(remote.roles) ? remote.roles : {}), ...(isPlainObject(local.roles) ? local.roles : {}) },
+        dossiers: mergeStamped(remote.dossiers, local.dossiers),
+        personBlocks: mergeStamped(remote.personBlocks, local.personBlocks),
+        recordEdits: mergeStamped(remote.recordEdits, local.recordEdits),
+        excludedThreads: { ...remote.excludedThreads, ...local.excludedThreads },
         // 幕后是存死的状态不是折算出来的,两边都写过就留较新的那份整份,别逐栏拼(拼出来会前后矛盾)
         // A replay engine includes undo state. Never let an old survey timestamp replace its newer operations.
         fate: local.fate?.thoughtEngine ? local.fate : remote.fate?.thoughtEngine ? remote.fate

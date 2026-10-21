@@ -13,8 +13,8 @@
  * 本文件不依赖酒馆和网络,可在 node 里直接测。
  */
 
-import { stripLedger } from './ledger.js?v=0.12.0';
-import { hashText } from './fingerprint.js?v=0.12.0';
+import { stripLedger } from './ledger.js?v=0.13.0';
+import { hashText } from './fingerprint.js?v=0.13.0';
 
 /** 一层 AI 回复里真正的正文。美梦巡游这类预设把正文包在 <content> 里,其余是状态栏和折叠块 */
 export function extractNarrative(mes) {

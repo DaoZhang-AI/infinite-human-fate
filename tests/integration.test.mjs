@@ -8,17 +8,17 @@ const plan = { current: '看着眼前的饭菜', short: { text: '短期测试', 
     long: [{ text: '长期测试', nextAction: '与 User 商量计划', failureLimit: 3 }],
     obsession: [{ text: '执念测试', nextAction: '继续寻找证据' }] };
 
-test('actual human/fate renderers: all people, full present cards, away one-line, fate has only lasting goals/world', async () => {
+test('actual human/fate renderers: persistent deck opens full away details; fate keeps lasting goals/world', async () => {
     const { api, elements } = await harness();
     for (const name of ['Char1', 'Char2', 'NPC']) commitThoughtPlan(api.state.memory.fate, api.state.view.rows, {}, name, plan);
     api.state.memory.fate.threads.NPC.now = '正在吃饭';
     api.testPanel('renlei'); api.renderPeople();
     const people = elements.get('ihf-people-view').innerHTML;
-    assert.equal((people.match(/class="ihf-thread" data-person=/g) ?? []).length, 2);
-    assert.equal((people.match(/class="ihf-muted ihf-away"/g) ?? []).length, 1);
-    assert.match(people, /NPC.*正在吃饭/);
-    assert.ok(people.indexOf('在场人物') < people.indexOf('离场人物'));
-    assert.match(people, /目前想法/);
+    assert.match(people, /ihf-playing-card/);
+    assert.equal((people.match(/data-person-action="select"/g) ?? []).length, 3);
+    api.state.selectedPerson = 'NPC'; api.state.personDetail = true; api.renderPeople();
+    assert.match(elements.get('ihf-people-view').innerHTML, /正在吃饭/);
+    assert.match(elements.get('ihf-people-view').innerHTML, /目前想法/);
     api.testPanel('mingyun'); api.renderFate();
     const fate = elements.get('ihf-fate-view').innerHTML;
     assert.match(fate, /长期测试/); assert.match(fate, /执念测试/);
@@ -32,8 +32,8 @@ test('explicit empty scene reaches actual UI, including cached v0.11 record repa
     assert.equal(api.sceneNames().size, 0);
     api.testPanel('renlei'); api.renderPeople();
     const html = elements.get('ihf-people-view').innerHTML;
-    assert.equal((html.match(/ihf-away/g) ?? []).length, 3);
-    assert.doesNotMatch(html, /class="ihf-thread" data-person=/);
+    assert.equal((html.match(/data-person-action="select"/g) ?? []).length, 3);
+    assert.match(html, /离场/);
 });
 
 test('real planning uses latest unledgered narrative and stores current thought only in memory cache', async () => {

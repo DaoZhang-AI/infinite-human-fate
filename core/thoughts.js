@@ -1,5 +1,5 @@
 /** Four independent layers. Model output proposes actions; only exact receipts settle them. */
-import { hashText } from './fingerprint.js?v=0.12.0';
+import { hashText } from './fingerprint.js?v=0.13.0';
 
 export const LAYERS = ['short', 'long', 'obsession'];
 export const INTERVALS = { short: 5, long: 10, obsession: 15 };
@@ -138,7 +138,9 @@ function settle(layers, receipt, row, cfg) {
 
 function applyEvent(all, event, cfg) {
     const layers = all[event.name] ??= emptyLayers();
-    if (event.kind === 'plan') {
+    if (event.kind === 'manual') {
+        all[event.name] = copy(event.data);
+    } else if (event.kind === 'plan') {
         const data = event.data;
         for (const layer of LAYERS) {
             const incoming = layer === 'short' ? (data.short ? [data.short] : []) : (data[layer] ?? []);
@@ -146,6 +148,7 @@ function applyEvent(all, event, cfg) {
             if (layer === 'short' && layers.short) continue;
             const existing = layer === 'short' ? [] : layers[layer];
             for (const [i, raw] of incoming.entries()) {
+                if (layers.deletedGoals?.includes(text(raw?.text))) continue;
                 if (existing.length >= 3 || existing.some(it => it.text === text(raw?.text))) continue;
                 const idea = makeIdea(raw, layer, `${event.id}-${layer}-${i}`, event.turn);
                 if (!idea) continue;
@@ -192,9 +195,27 @@ export function projectThoughts(fate, rows = [], cfg = {}) {
         run(row.anchor);
     }
     for (const [name, layers] of Object.entries(all)) {
+        if (fate.excludedNames?.includes(name)) { delete all[name]; continue; }
         if (fate.threads[name]) fate.threads[name].thoughts = layers;
     }
     return { ...clock, people: all, blocked };
+}
+
+/** Explicit user edits participate in replay; model plans cannot delete goals. */
+export function editThoughtLayers(fate, rows, cfg, name, layers) {
+    const clock = projectThoughts(fate, rows, cfg);
+    if (clock.blocked) throw new Error('编辑超出念头撤销范围，请先恢复原分支');
+    if (!layers || !Array.isArray(layers.long) || !Array.isArray(layers.obsession) || !Array.isArray(layers.archive)) throw new Error('念头列表格式不正确');
+    for (const idea of [...activeIdeas(layers), ...layers.archive]) {
+        if (!idea.id || !Array.isArray(idea.history) || !['short', 'long', 'obsession'].includes(idea.layer)) throw new Error('念头编号、层级或行动历史格式不正确');
+    }
+    const before = clock.people[name];
+    const kept = new Set([...activeIdeas(layers), ...layers.archive].map(it => it.text));
+    layers.deletedGoals = [...new Set([...(before?.deletedGoals ?? []), ...(layers.deletedGoals ?? []),
+        ...[...activeIdeas(before), ...(before?.archive ?? [])].filter(it => !kept.has(it.text)).map(it => it.text)])];
+    fate.thoughtEngine.events.push({ id: `manual-${Date.now()}-${fate.thoughtEngine.events.length}`, kind: 'manual',
+        name, anchor: clock.anchor, turn: clock.turn, data: copy(layers) });
+    return projectThoughts(fate, rows, cfg);
 }
 
 /** Current thought is stripped before the persistent event is created. */
@@ -291,6 +312,7 @@ export function buildThoughtMessages({ name, card, story, layers, isPresent, rom
 short 可以为 null。long/obsession 的每项:{"text":"念头","nextAction":"具体下次行动","failureLimit":3}。长期的 failureLimit 根据性格选择 1..10。
 四层独立，不把短期升级成长远目标。已有活动念头不重复创建，不改变其层级，不替它宣告成功或放弃。
 只为确有依据的空槽提出念头，长期与执念可以一直为空。执念除达成永不消失。
+deletedGoals 是用户手工删除的念头，不重新创建或换措辞恢复。
 长期和执念必须结合全部历次尝试/行动/结果规划下次行动，updates 格式:{"id":"原念头ID","nextAction":"具体下一步"}。
 短期为空且有执行结果时，只根据当前剧情和该结果生成新短期，不续写已删除短期的历史。
 current 每次根据最新正文重算，不引用上次的当前想法。不得把计划或尝试当成已经执行。
@@ -301,6 +323,7 @@ ${romance ? '允许有与 User 无关的感情线，但只能使用材料中已�
                 nextAction: it.nextAction, pending: it.pending, failures: it.failures, failureLimit: it.failureLimit,
                 history: it.layer === 'short' ? undefined : it.history })),
             archived: layers?.archive ?? [],
+            deletedGoals: layers?.deletedGoals ?? [],
             shortResult: layers?.replacement ?? null }) },
     ];
 }

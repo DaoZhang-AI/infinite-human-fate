@@ -9,8 +9,8 @@
  * 本文件不依赖酒馆,可在 node 里直接测。
  */
 
-import { dayToDate, formatDate, fuzzyAgo } from './calendar.js?v=0.12.0';
-import { stripLedger } from './ledger.js?v=0.12.0';
+import { dayToDate, formatDate, fuzzyAgo } from './calendar.js?v=0.13.0';
+import { stripLedger } from './ledger.js?v=0.13.0';
 
 /**
  * 拦截器拿到的副本已经跑过正则(public/script.js:4447),没法按正文指纹认楼。
@@ -163,7 +163,7 @@ export function buildMemoryBlock({ rows, chat, zones, lastDay, tier, archive, re
     const parts = [
         '<记忆>',
         buildLevels(present, { N: zones.body.length, M: zones.summary.length }),
-        last?.date ? `当前剧情日期:${formatDate(last.date)}(Day${lastDay})。下面方括号里的时间都是相对今天说的。` : `当前剧情日期:Day${lastDay}。下面方括号里的时间都是相对今天说的。`,
+        last?.date ? `当前剧情日期:${formatDate(last.date)}。下面方括号里的时间都是相对今天说的。正文沿用这些口语时间，不写 Day 计数。` : '下面方括号里的时间都是相对今天说的。正文沿用这些口语时间，不写 Day 计数。',
     ];
     if (olderText) parts.push('', '[时间线]', olderText);
     if (recallText) parts.push('', '[回忆]', '以下是过去的片段,不是现在正在发生的事。', recallText);
